@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台股籌碼與期貨日報看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #f5f6f8;
+            --card-bg: #ffffff;
+            --text-main: #1a1a1a;
+            --text-sub: #666666;
+            --green-color: #00875a; /* 綠色 / 空方 / 負值 */
+            --red-color: #de350b;   /* 紅色 / 多方 / 正值 */
+            --border-radius: 12px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .dashboard-container {
+            width: 100%;
+            max-width: 600px;
+            background-color: var(--bg-color);
+        }
+
+        .header-section {
+            margin-bottom: 20px;
+        }
+
+        .header-title-sub {
+            font-size: 14px;
+            color: var(--text-sub);
+            font-weight: 600;
+        }
+
+        .header-title-main {
+            font-size: 24px;
+            font-weight: 800;
+            margin: 4px 0 16px 0;
+        }
+
+        /* 恐懼貪婪指數列 */
+        .sentiment-card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+
+        .sentiment-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .sentiment-score {
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .sentiment-badge {
+            background-color: #f4f5f7;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .gauge-bar {
+            height: 8px;
+            background: linear-gradient(to right, #4caf50, #ffeb3b, #f44336);
+            border-radius: 4px;
+            position: relative;
+            margin-top: 10px;
+        }
+
+        .gauge-pointer {
+            width: 4px;
+            height: 14px;
+            background: #000;
+            position: absolute;
+            top: -3px;
+            transform: translateX(-50%);
+        }
+
+        /* 網格卡片佈局 */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+
+        .card-title {
+            font-size: 13px;
+            color: var(--text-sub);
+            margin-bottom: 8px;
+        }
+
+        .card-value {
+            font-size: 26px;
+            font-weight: bold;
+        }
+
+        .card-value.green { color: var(--green-color); }
+        .card-value.red { color: var(--red-color); }
+
+        .card-note {
+            font-size: 11px;
+            color: var(--text-sub);
+            margin-top: 6px;
+        }
+
+        /* 交叉判讀備註區 */
+        .summary-box {
+            background-color: #ffffff;
+            border-radius: var(--border-radius);
+            padding: 14px 16px;
+            font-size: 13px;
+            color: #444;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .footer-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #999;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="dashboard-container">
+
+    <!-- 頂部標題區 -->
+    <div class="header-section">
+        <div class="header-title-sub">濾網 2 • 期貨籌碼 <span style="float:right;" id="data-date">資料日期 2026-07-22</span></div>
+        <div class="header-title-main">現貨之外，期貨在說什麼？</div>
+    </div>
+
+    <!-- 恐懼與貪婪指數 -->
+    <div class="sentiment-card">
+        <div class="sentiment-header">
+            <div>台股情緒指數 <span class="sentiment-score" id="sentiment-val">42.4</span><span style="font-size: 12px; color: #888;"> /100</span></div>
+            <div class="sentiment-badge" id="sentiment-status">震盪整理期(中性)</div>
+        </div>
+        <div class="gauge-bar">
+            <div class="gauge-pointer" id="gauge-pointer" style="left: 42.4%;"></div>
+        </div>
+    </div>
+
+    <!-- 主要指標卡片：外資台指期 -->
+    <div class="card" style="margin-bottom: 12px;">
+        <div class="card-title">外資台指期淨未平倉</div>
+        <div class="card-value green" id="foreign-futures">-76,595 口</div>
+        <div class="card-note" id="foreign-change">較昨日 +1,895 口 | 期貨端偏空避險</div>
+    </div>
+
+    <!-- 2x2 指標網格 -->
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-title">散戶小台多空比</div>
+            <div class="card-value red" id="retail-small">+22.2%</div>
+            <div class="card-note">≥20% 過熱（反指標）</div>
+        </div>
+        <div class="card">
+            <div class="card-title">散戶微台多空比</div>
+            <div class="card-value red" id="retail-micro">+25.9%</div>
+            <div class="card-note">≥20% 過熱（反指標）</div>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-title">Put/Call 未平倉比</div>
+            <div class="card-value" id="pc-ratio">101.9%</div>
+            <div class="card-note">>100% 偏多防護</div>
+        </div>
+        <div class="card">
+            <div class="card-title">外資選擇權 (Call/Put淨OI)</div>
+            <div class="card-value" style="font-size: 18px;" id="foreign-options">417 / 2,735</div>
+            <div class="card-note">口數；正=偏買方</div>
+        </div>
+    </div>
+
+    <!-- 交叉判讀 -->
+    <div class="summary-box">
+        <strong>交叉判讀：</strong><span id="analysis-text">現貨偏多、但外資期貨偏空 + 散戶過度偏多 = 「現貨熱、期貨示警」的背離格局。</span>
+    </div>
+
+    <!-- 圖表區 -->
+    <div class="card">
+        <div class="card-title">小台散戶多空比歷史趨勢</div>
+        <canvas id="trendChart" height="150"></canvas>
+    </div>
+
+    <!-- 頁尾資訊 -->
+    <div class="footer-info">
+        <span>tivo168 投資助理</span>
+        <span id="update-time">報表產出 2026-07-22 18:05</span>
+    </div>
+</div>
+
+<script>
+    // 自動載入最新的 data.json 資料
+    async function loadDashboardData() {
+        try {
+            const response = await fetch('data.json?t=' + new Date().getTime());
+            const data = await response.json();
+
+            // 更新文字與數值
+            document.getElementById('data-date').innerText = '資料日期 ' + data.date;
+            document.getElementById('sentiment-val').innerText = data.sentiment;
+            document.getElementById('sentiment-status').innerText = data.sentimentStatus;
+            document.getElementById('gauge-pointer').style.left = data.sentiment + '%';
+            
+            document.getElementById('foreign-futures').innerText = data.foreignFutures + ' 口';
+            document.getElementById('foreign-change').innerText = `較昨日 ${data.foreignChange} 口 | ${data.foreignNote}`;
+            
+            document.getElementById('retail-small').innerText = (data.retailSmall >= 0 ? '+' : '') + data.retailSmall + '%';
+            document.getElementById('retail-micro').innerText = (data.retailMicro >= 0 ? '+' : '') + data.retailMicro + '%';
+            document.getElementById('pc-ratio').innerText = data.pcRatio + '%';
+            document.getElementById('foreign-options').innerText = `${data.optionCall} / ${data.optionPut}`;
+            document.getElementById('analysis-text').innerText = data.analysis;
+            document.getElementById('update-time').innerText = '報表產出 ' + data.updateTime;
+
+            // 初始化或更新圖表
+            renderChart(data.historyDates, data.historyValues);
+        } catch (e) {
+            console.error("無法取得最新數據:", e);
+        }
+    }
+
+    function renderChart(labels, values) {
+        const ctx = document.getElementById('trendChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '散戶多空比 (%)',
+                    data: values,
+                    backgroundColor: values.map(v => v >= 0 ? '#de350b' : '#00875a')
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { grid: { color: '#f0f0f0' } }, x: { grid: { display: false } } }
+            }
+        });
+    }
+
+    // 頁面開啟時自動執行
+    loadDashboardData();
+</script>
+
+</body>
+</html>
