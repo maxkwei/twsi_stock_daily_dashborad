@@ -1,162 +1,109 @@
 import json
-import datetime
 import requests
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 
 def fetch_twse_90days():
-    """
-    Fetch TAIEX index prices and volumes from TWSE for the last ~90 calendar days.
-    Calculates 20MA, 60MA, and volume colors.
-    """
-    today = datetime.datetime.now()
-    raw_data = []
-
-    # Fetch data for the past 4 months to guarantee at least 60 trading days (90 calendar days)
+    """從證交所 API 抓取過去 4 個月數據並計算 90 天 (約 60 交易日) 的 K 線與 MA"""
+    today = datetime.now()
+    all_data = []
+    
+    # 逐月抓取近 4 個月的資料以確保補足 60 個交易日
     for i in range(4):
-        # Calculate target year and month
-        month_offset = today.month - 1 - i
-        year = today.year + (month_offset // 12)
-        month = (month_offset % 12) + 1
-        date_str = f"{year}{month:02d}01"
-
+        target_date = today - timedelta(days=i*30)
+        date_str = target_date.strftime("%Y%m01")
         url = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?response=json&date={date_str}"
         try:
-            res = requests.get(url, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("stat") == "OK" and "data" in data:
-                    for row in data["data"]:
-                        # Format ROC year (e.g., "113/07/01") to AD year ("2024/07/01")
-                        parts = row[0].split('/')
-                        ad_year = int(parts[0]) + 1911
-                        dt = datetime.datetime(ad_year, int(parts[1]), int(parts[2]))
-                        
-                        price = float(row[4].replace(',', ''))
-                        # Volume in hundred millions (億元)
-                        volume = round(float(row[2].replace(',', '')) / 100000000, 2)
-                        
-                        raw_data.append({
-                            "datetime": dt,
-                            "date_str": dt.strftime("%Y-%m-%d"),
-                            "label": dt.strftime("%m/%d"),
-                            "price": price,
-                            "volume": volume
-                        })
+            res = requests.get(url, timeout=10).json()
+            if res.get("stat") == "OK":
+                for row in res["data"]:
+                    # row format: [日期, 成交股數, 成交金額, 成交筆數, 發行量加權股價指數, 漲跌點數]
+                    date_parts = row[0].split('/')
+                    year = int(date_parts[0]) + 1911 # 民國轉西元
+                    formatted_date = f"{year}-{date_parts[1]}-{date_parts[2]}"
+                    price = float(row[4].replace(',', ''))
+                    volume = float(row[2].replace(',', '')) / 100000000 # 單位：億元
+                    all_data.append({"date": formatted_date, "price": price, "volume": volume})
         except Exception as e:
-            print(f"Error fetching TWSE data for {date_str}: {e}")
+            print(f"Fetch error for {date_str}: {e}")
 
-    if not raw_data:
-        return None
+    if not all_data:
+        return {}
 
-    # Convert to DataFrame for MA calculations
-    df = pd.DataFrame(raw_data).drop_duplicates(subset=['date_str']).sort_values('datetime').reset_index(drop=True)
+    # 轉 Pandas 進行排序與均線計算
+    df = pd.DataFrame(all_data).drop_duplicates(subset=['date']).sort_values('date').reset_index(drop=True)
     
-    # Calculate 20MA and 60MA
+    # 計算 20MA 與 60MA
     df['ma20'] = df['price'].rolling(window=20).mean()
     df['ma60'] = df['price'].rolling(window=60).mean()
-
-    # Filter for roughly 60 trading days (~90 calendar days)
-    df_filtered = df.tail(60).dropna(subset=['ma20']).copy()
-
-    # Determine volume colors (red for gain/same, green for loss)
-    prices = df_filtered['price'].tolist()
+    
+    # 取最近 60 個交易日 (約近 90 天曆日)
+    df_recent = df.tail(60).dropna(subset=['ma20']).copy()
+    
+    # 計算漲跌顏色
+    prices = df_recent['price'].tolist()
     volume_colors = []
     for i in range(len(prices)):
-        if i == 0 or prices[i] >= prices[i - 1]:
-            volume_colors.append('#de350b')  # Red (up)
+        if i == 0 or prices[i] >= prices[i-1]:
+            volume_colors.append('#de350b') # 漲 (紅)
         else:
-            volume_colors.append('#00875a')  # Green (down)
+            volume_colors.append('#00875a') # 跌 (綠)
 
-    latest_row = df_filtered.iloc[-1]
-    prev_row = df_filtered.iloc[-2] if len(df_filtered) > 1 else latest_row
+    date_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d in df_recent['date']]
 
-    change = round(latest_row['price'] - prev_row['price'], 2)
-    change_pct = round((change / prev_row['price']) * 100, 2)
-
-    chart_data = {
-        "dates": df_filtered['label'].tolist(),
-        "prices": [round(x, 2) for x in df_filtered['price'].tolist()],
-        "ma20": [round(x, 2) if not np.isnan(x) else round(latest_row['price'], 2) for x in df_filtered['ma20'].tolist()],
-        "ma60": [round(x, 2) if not np.isnan(x) else round(latest_row['price'], 2) for x in df_filtered['ma60'].tolist()],
-        "volumes": df_filtered['volume'].tolist(),
+    return {
+        "dates": date_labels,
+        "prices": [round(x, 2) for x in df_recent['price'].tolist()],
+        "ma20": [round(x, 2) for x in df_recent['ma20'].tolist()],
+        "ma60": [round(x, 2) for x in df_recent['ma60'].tolist()],
+        "volumes": [round(x, 2) for x in df_recent['volume'].tolist()],
         "volumeColors": volume_colors
     }
 
-    summary = {
-        "price": round(latest_row['price'], 2),
-        "change": change,
-        "changePercent": change_pct
-    }
-
-    return chart_data, summary
-
-def fetch_taifex_data():
-    today_dt = datetime.datetime.now()
-    today_str = today_dt.strftime("%Y-%m-%d")
-    now_str = today_dt.strftime("%Y-%m-%d %H:%M")
-
-    # Fetch 90-day TAIEX Index & Chart Data
-    taiex_result = fetch_twse_90days()
+def update_json():
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    today_str = datetime.now().strftime("%Y-%m-%d")
     
-    if taiex_result:
-        taiex_chart, taiex_summary = taiex_result
+    chart_data = fetch_twse_90days()
+    
+    if chart_data and len(chart_data.get("prices", [])) > 1:
+        latest_price = chart_data["prices"][-1]
+        prev_price = chart_data["prices"][-2]
+        change = round(latest_price - prev_price, 2)
+        change_pct = round((change / prev_price) * 100, 2)
     else:
-        # Fallback if request fails
-        taiex_summary = {"price": 48353.49, "change": 413.36, "changePercent": 0.86}
-        taiex_chart = {
-            "dates": ["08/01", "08/15", "09/01", "09/15", "10/01"],
-            "prices": [45800, 46200, 46800, 47940.13, 48353.49],
-            "ma20": [45000, 45800, 46200, 47100, 47580],
-            "ma60": [42500, 43800, 44600, 45500, 46120],
-            "volumes": [12800, 11900, 13100, 12400, 14800],
-            "volumeColors": ["#de350b", "#de350b", "#de350b", "#de350b", "#de350b"]
-        }
+        latest_price, change, change_pct = 0, 0, 0
 
-    # OTC Chart Fallback / Mock Sync
-    otc_summary = {"price": 425.60, "change": 5.42, "changePercent": 1.29}
-    otc_chart = {
-        "dates": taiex_chart["dates"],
-        "prices": [415, 410, 418, 420.18, 425.60] if len(taiex_chart["dates"]) <= 5 else [400 + i * 0.5 for i in range(len(taiex_chart["dates"]))],
-        "ma20": [412, 414, 416, 418, 420] if len(taiex_chart["dates"]) <= 5 else [398 + i * 0.5 for i in range(len(taiex_chart["dates"]))],
-        "ma60": [400, 405, 408, 410, 414] if len(taiex_chart["dates"]) <= 5 else [390 + i * 0.4 for i in range(len(taiex_chart["dates"]))],
-        "volumes": [2100, 1950, 2300, 2200, 2800] if len(taiex_chart["dates"]) <= 5 else [2000 for _ in taiex_chart["dates"]],
-        "volumeColors": taiex_chart["volumeColors"]
-    }
-
-    # Assembled data payload for data.json
     latest_data = {
         "date": today_str,
         "updateTime": now_str,
         "sentiment": 58.6,
         "sentimentStatus": "偏多震盪期(樂觀)",
-        "foreignFutures": -32150,
-        "foreignChange": 2450,
+        "taiex": {
+            "price": latest_price,
+            "change": change,
+            "changePercent": change_pct
+        },
+        "foreignFutures": "-32,150",
+        "foreignChange": "+2,450",
         "foreignNote": "期貨空單持續回補",
         "retailSmall": -12.5,
         "retailMicro": -8.4,
         "pcRatio": 118.5,
-        "optionCall": 12450,
-        "optionPut": 18200,
-        "retailLong": 18500,
-        "retailShort": 23800,
-        "analysis": "大盤放量突破並維持偏多格局；散戶多空比轉負，籌碼面偏向多方籌碼鎖定。",
-        "taiex": taiex_summary,
-        "otc": otc_summary,
-        "retailChart": {
-            "dates": taiex_chart["dates"][-10:],
-            "retailRatios": [-5.2, -7.1, -8.5, -10.2, -12.5],
-            "indexValues": taiex_chart["prices"][-10:]
-        },
-        "taiexChart": taiex_chart,
-        "otcChart": otc_chart
+        "optionCall": "12,450",
+        "optionPut": "18,200",
+        "analysis": "現貨與期貨籌碼逐步回穩，散戶小台與微台偏空（反指標偏多），P/C Ratio 保持在 100% 以上，整體維持偏多震盪格局。",
+        # 動態更新的 90 天圖表數據
+        "taiexChart": chart_data,
+        "historyDates": chart_data.get("dates", []),
+        "historyValues": chart_data.get("prices", [])
     }
 
-    # Write payload to data.json
     with open("data.json", "w", encoding="utf-8") as f:
-        json.dump(latest_data, f, ensure_ascii=False, indent=2)
-
-    print(f"[{now_str}] 90天收盤價、均線與成交量數據已成功更新至 data.json！")
+        json.dump(latest_data, f, ensure_ascii=False, indent=4)
+        
+    print(f"[{now_str}] data.json 已成功自動更新至最新的 90 天動態數據！")
 
 if __name__ == "__main__":
-    fetch_taifex_data()
+    update_json()
