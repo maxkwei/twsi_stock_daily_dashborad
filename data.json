@@ -1,0 +1,31 @@
+{
+    "date": "2026-10-01",
+    "updateTime": "2026-10-01 11:59",
+    "sentiment": 42.4,
+    "sentimentStatus": "震盪整理期(中性)",
+    "foreignFutures": "-76,595",
+    "foreignChange": "+1,895",
+    "foreignNote": "期貨端偏空避險",
+    "retailSmall": 22.2,
+    "retailMicro": 25.9,
+    "pcRatio": 101.9,
+    "optionCall": "417",
+    "optionPut": "2,735",
+    "analysis": "現貨偏多、但外資期貨偏空＋散戶過度偏多＝「現貨熱、期貨示警」的背離格局。",
+    "historyDates": [
+        "7/15",
+        "7/16",
+        "7/17",
+        "7/18",
+        "7/19",
+        "7/22"
+    ],
+    "historyValues": [
+        15.8,
+        18.2,
+        20.1,
+        19.5,
+        21.0,
+        22.2
+    ]
+}
