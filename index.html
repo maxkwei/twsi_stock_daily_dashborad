@@ -4,14 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>台股籌碼日報 • 外資動向</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        body {
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            background-color: #f8fafc;
-        }
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen pb-12">
@@ -61,7 +57,7 @@
             <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">外資台指期淨未平倉</h2>
             <div class="flex items-baseline space-x-2 mb-1">
                 <span id="foreign-oi" class="text-3xl font-bold text-slate-900">---</span>
-                <span id="foreign-oi-unit" class="text-lg font-semibold text-slate-700">口</span>
+                <span class="text-lg font-semibold text-slate-700">口</span>
             </div>
             <div class="text-xs text-slate-500 flex items-center space-x-2">
                 <span>較昨日 <span id="foreign-oi-diff" class="font-medium">-- 口</span></span>
@@ -74,7 +70,7 @@
         <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
             <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">散戶小台多空比</h2>
             <div class="flex items-baseline space-x-2 mb-1">
-                <span id="small-tai-ratio" class="text-3xl font-bold text-slate-900">--%</span>
+                <span id="small-tai-ratio" class="text-3xl font-bold text-rose-600">--%</span>
             </div>
             <div class="text-xs text-slate-400">
                 ≥20% 過熱（反指標）
@@ -85,7 +81,7 @@
         <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
             <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">散戶微台多空比</h2>
             <div class="flex items-baseline space-x-2 mb-1">
-                <span id="micro-tai-ratio" class="text-3xl font-bold text-slate-900">--%</span>
+                <span id="micro-tai-ratio" class="text-3xl font-bold text-rose-600">--%</span>
             </div>
             <div class="text-xs text-slate-400">
                 ≥20% 過熱（反指標）
@@ -112,7 +108,7 @@
                 <span id="opt-put" class="text-2xl font-bold text-slate-900">--</span>
             </div>
             <div id="opt-status" class="text-xs text-slate-500">
-                --
+                口數；正=偏買方
             </div>
         </div>
 
@@ -125,32 +121,18 @@
 
     <!-- JavaScript Data Handler -->
     <script>
-        // 安全抓取 JSON 多種可能 key 的輔助函式
-        function getVal(obj, keys) {
-            for (let k of keys) {
-                if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
-            }
-            return null;
-        }
-
         function updateUI(data) {
             if (!data) return;
 
-            // 1. 日期與產出時間
-            const dateVal = getVal(data, ['date', 'data_date', 'Date', 'update_date']);
-            if (dateVal) document.getElementById('data-date').innerText = dateVal;
+            // 日期與報表時間
+            if (data.date) document.getElementById('data-date').innerText = data.date;
+            if (data.report_time) document.getElementById('report-time').innerText = data.report_time;
 
-            const timeVal = getVal(data, ['report_time', 'update_time', 'time', 'generated_at']);
-            if (timeVal) document.getElementById('report-time').innerText = timeVal;
-
-            // 2. 情緒指數
-            const sentimentVal = getVal(data, ['sentiment', 'sentiment_index', 'emotion_index', 'sentiment_score']);
-            if (sentimentVal !== null) {
-                const score = parseFloat(sentimentVal);
+            // 1. 台股情緒指數
+            if (data.sentiment !== undefined) {
+                const score = parseFloat(data.sentiment);
                 document.getElementById('sentiment-score').innerText = score.toFixed(1);
-                
-                const pointer = document.getElementById('sentiment-pointer');
-                pointer.style.left = `${Math.min(Math.max(score, 0), 100)}%`;
+                document.getElementById('sentiment-pointer').style.left = `${Math.min(Math.max(score, 0), 100)}%`;
 
                 const badge = document.getElementById('sentiment-badge');
                 if (score >= 60) {
@@ -165,81 +147,47 @@
                 }
             }
 
-            // 3. 外資台指期未平倉
-            const foreignOiVal = getVal(data, ['foreign_oi', 'foreign_net_oi', 'foreign_futures', 'foreign_tx']);
-            if (foreignOiVal !== null) {
-                const oi = parseInt(foreignOiVal);
-                const oiElem = document.getElementById('foreign-oi');
-                oiElem.innerText = isNaN(oi) ? foreignOiVal : oi.toLocaleString();
-                if (!isNaN(oi)) {
-                    oiElem.className = oi < 0 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-rose-600';
-                }
+            // 2. 外資台指期淨未平倉
+            if (data.foreign_oi !== undefined) {
+                const oi = parseInt(data.foreign_oi);
+                const elem = document.getElementById('foreign-oi');
+                elem.innerText = oi.toLocaleString();
+                elem.className = oi < 0 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-rose-600';
+            }
+            if (data.foreign_oi_diff !== undefined) {
+                const diff = parseInt(data.foreign_oi_diff);
+                document.getElementById('foreign-oi-diff').innerText = `${diff > 0 ? '+' : ''}${diff.toLocaleString()} 口`;
+            }
+            if (data.foreign_oi_status) {
+                document.getElementById('foreign-oi-status').innerText = data.foreign_oi_status;
             }
 
-            const foreignOiDiffVal = getVal(data, ['foreign_oi_diff', 'foreign_diff', 'foreign_oi_change']);
-            if (foreignOiDiffVal !== null) {
-                const diff = parseInt(foreignOiDiffVal);
-                const diffText = !isNaN(diff) ? `${diff > 0 ? '+' : ''}${diff.toLocaleString()} 口` : `${foreignOiDiffVal} 口`;
-                document.getElementById('foreign-oi-diff').innerText = diffText;
+            // 3. 散戶小台多空比
+            if (data.small_tai_ratio !== undefined) {
+                document.getElementById('small-tai-ratio').innerText = `+${data.small_tai_ratio}%`;
             }
 
-            const foreignStatusVal = getVal(data, ['foreign_oi_status', 'foreign_status', 'foreign_oi_note']);
-            if (foreignStatusVal) {
-                document.getElementById('foreign-oi-status').innerText = foreignStatusVal;
+            // 4. 散戶微台多空比
+            if (data.micro_tai_ratio !== undefined) {
+                document.getElementById('micro-tai-ratio').innerText = `+${data.micro_tai_ratio}%`;
             }
 
-            // 4. 散戶小台多空比
-            const smallTaiVal = getVal(data, ['small_tai_ratio', 'small_tai', 'retail_small_tai', 'small_tai_long_short_ratio']);
-            if (smallTaiVal !== null) {
-                const elem = document.getElementById('small-tai-ratio');
-                const val = parseFloat(smallTaiVal);
-                elem.innerText = isNaN(val) ? `${smallTaiVal}%` : `${val}%`;
-                if (!isNaN(val)) {
-                    elem.className = val >= 20 ? 'text-3xl font-bold text-rose-600' : (val <= -20 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-slate-900');
-                }
+            // 5. Put/Call 未平倉比
+            if (data.pc_ratio !== undefined) {
+                document.getElementById('pc-ratio').innerText = `${data.pc_ratio}%`;
             }
 
-            // 5. 散戶微台多空比
-            const microTaiVal = getVal(data, ['micro_tai_ratio', 'micro_tai', 'retail_micro_tai', 'micro_tai_long_short_ratio']);
-            if (microTaiVal !== null) {
-                const elem = document.getElementById('micro-tai-ratio');
-                const val = parseFloat(microTaiVal);
-                elem.innerText = isNaN(val) ? `${microTaiVal}%` : `${val}%`;
-                if (!isNaN(val)) {
-                    elem.className = val >= 20 ? 'text-3xl font-bold text-rose-600' : (val <= -20 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-slate-900');
-                }
-            }
-
-            // 6. Put/Call 未平倉比
-            const pcVal = getVal(data, ['pc_ratio', 'put_call_ratio', 'pc_oi_ratio']);
-            if (pcVal !== null) {
-                const val = parseFloat(pcVal);
-                document.getElementById('pc-ratio').innerText = isNaN(val) ? `${pcVal}%` : `${val}%`;
-            }
-
-            // 7. 外資選擇權
-            const optCallVal = getVal(data, ['opt_call', 'foreign_call', 'option_call']);
-            if (optCallVal !== null) document.getElementById('opt-call').innerText = optCallVal;
-
-            const optPutVal = getVal(data, ['opt_put', 'foreign_put', 'option_put']);
-            if (optPutVal !== null) document.getElementById('opt-put').innerText = optPutVal;
-
-            const optStatusVal = getVal(data, ['opt_status', 'option_status', 'opt_note']);
-            if (optStatusVal) document.getElementById('opt-status').innerText = optStatusVal;
+            // 6. 外資選擇權
+            if (data.opt_call !== undefined) document.getElementById('opt-call').innerText = data.opt_call;
+            if (data.opt_put !== undefined) document.getElementById('opt-put').innerText = data.opt_put;
+            if (data.opt_status) document.getElementById('opt-status').innerText = data.opt_status;
         }
 
         // 讀取 data.json
         fetch('data.json?v=' + new Date().getTime())
-            .then(res => {
-                if (!res.ok) throw new Error('Data file fetch failed');
-                return res.json();
-            })
-            .then(data => {
-                updateUI(data);
-            })
-            .catch(err => {
-                console.error('讀取 data.json 失敗:', err);
-            });
+            .then(res => res.json())
+            .then(data => updateUI(data))
+            .catch(err => console.error('無法取得資料:', err));
     </script>
 </body>
 </html>
