@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>台股籌碼日報 • 外資動向</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -70,7 +71,7 @@
         <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
             <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">散戶小台多空比</h2>
             <div class="flex items-baseline space-x-2 mb-1">
-                <span id="small-tai-ratio" class="text-3xl font-bold text-rose-600">--%</span>
+                <span id="small-tai-ratio" class="text-3xl font-bold text-slate-900">--%</span>
             </div>
             <div class="text-xs text-slate-400">
                 ≥20% 過熱（反指標）
@@ -81,7 +82,7 @@
         <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
             <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">散戶微台多空比</h2>
             <div class="flex items-baseline space-x-2 mb-1">
-                <span id="micro-tai-ratio" class="text-3xl font-bold text-rose-600">--%</span>
+                <span id="micro-tai-ratio" class="text-3xl font-bold text-slate-900">--%</span>
             </div>
             <div class="text-xs text-slate-400">
                 ≥20% 過熱（反指標）
@@ -119,75 +120,103 @@
         <span class="text-xs text-slate-400">報表產出時間：<span id="report-time">--</span></span>
     </footer>
 
-    <!-- JavaScript Data Handler -->
+    <!-- JavaScript Data Handler (雙重相容版) -->
     <script>
         function updateUI(data) {
             if (!data) return;
 
-            // 日期與報表時間
-            if (data.date) document.getElementById('data-date').innerText = data.date;
-            if (data.report_time) document.getElementById('report-time').innerText = data.report_time;
+            // 1. 日期與時間
+            const dateVal = data.date || data.data_date || data.Date;
+            if (dateVal) document.getElementById('data-date').innerText = dateVal;
 
-            // 1. 台股情緒指數
+            const timeVal = data.updateTime || data.update_time || data.report_time;
+            if (timeVal) document.getElementById('report-time').innerText = timeVal;
+
+            // 2. 台股情緒指數
             if (data.sentiment !== undefined) {
                 const score = parseFloat(data.sentiment);
                 document.getElementById('sentiment-score').innerText = score.toFixed(1);
                 document.getElementById('sentiment-pointer').style.left = `${Math.min(Math.max(score, 0), 100)}%`;
 
                 const badge = document.getElementById('sentiment-badge');
+                const statusText = data.sentimentStatus || (score >= 60 ? '貪婪' : (score <= 40 ? '恐慌' : '震盪整理期(中性)'));
+                badge.innerText = statusText;
+                
                 if (score >= 60) {
-                    badge.innerText = '貪婪';
                     badge.className = 'px-3 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-700';
                 } else if (score <= 40) {
-                    badge.innerText = '恐慌';
                     badge.className = 'px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700';
                 } else {
-                    badge.innerText = '中性';
                     badge.className = 'px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600';
                 }
             }
 
-            // 2. 外資台指期淨未平倉
-            if (data.foreign_oi !== undefined) {
-                const oi = parseInt(data.foreign_oi);
+            // 3. 外資台指期淨未平倉 (支援 foreignFutures 與 foreign_oi)
+            const foreignOiVal = data.foreignFutures !== undefined ? data.foreignFutures : data.foreign_oi;
+            if (foreignOiVal !== undefined && foreignOiVal !== null) {
                 const elem = document.getElementById('foreign-oi');
-                elem.innerText = oi.toLocaleString();
-                elem.className = oi < 0 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-rose-600';
-            }
-            if (data.foreign_oi_diff !== undefined) {
-                const diff = parseInt(data.foreign_oi_diff);
-                document.getElementById('foreign-oi-diff').innerText = `${diff > 0 ? '+' : ''}${diff.toLocaleString()} 口`;
-            }
-            if (data.foreign_oi_status) {
-                document.getElementById('foreign-oi-status').innerText = data.foreign_oi_status;
+                elem.innerText = typeof foreignOiVal === 'number' ? foreignOiVal.toLocaleString() : foreignOiVal;
+                
+                const numVal = parseInt(String(foreignOiVal).replace(/,/g, ''));
+                if (!isNaN(numVal)) {
+                    elem.className = numVal < 0 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-rose-600';
+                }
             }
 
-            // 3. 散戶小台多空比
-            if (data.small_tai_ratio !== undefined) {
-                document.getElementById('small-tai-ratio').innerText = `+${data.small_tai_ratio}%`;
+            const foreignDiffVal = data.foreignChange !== undefined ? data.foreignChange : data.foreign_oi_diff;
+            if (foreignDiffVal !== undefined && foreignDiffVal !== null) {
+                document.getElementById('foreign-oi-diff').innerText = `${foreignDiffVal} 口`;
             }
 
-            // 4. 散戶微台多空比
-            if (data.micro_tai_ratio !== undefined) {
-                document.getElementById('micro-tai-ratio').innerText = `+${data.micro_tai_ratio}%`;
+            const foreignNoteVal = data.foreignNote || data.foreign_oi_status;
+            if (foreignNoteVal) {
+                document.getElementById('foreign-oi-status').innerText = foreignNoteVal;
             }
 
-            // 5. Put/Call 未平倉比
-            if (data.pc_ratio !== undefined) {
-                document.getElementById('pc-ratio').innerText = `${data.pc_ratio}%`;
+            // 4. 散戶小台多空比 (支援 retailSmall 與 small_tai_ratio)
+            const retailSmallVal = data.retailSmall !== undefined ? data.retailSmall : data.small_tai_ratio;
+            if (retailSmallVal !== undefined && retailSmallVal !== null) {
+                const elem = document.getElementById('small-tai-ratio');
+                const numVal = parseFloat(retailSmallVal);
+                elem.innerText = isNaN(numVal) ? `${retailSmallVal}%` : `${numVal >= 0 ? '+' : ''}${numVal}%`;
+                if (!isNaN(numVal)) {
+                    elem.className = numVal >= 20 ? 'text-3xl font-bold text-rose-600' : (numVal <= -20 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-slate-900');
+                }
             }
 
-            // 6. 外資選擇權
-            if (data.opt_call !== undefined) document.getElementById('opt-call').innerText = data.opt_call;
-            if (data.opt_put !== undefined) document.getElementById('opt-put').innerText = data.opt_put;
-            if (data.opt_status) document.getElementById('opt-status').innerText = data.opt_status;
+            // 5. 散戶微台多空比 (支援 retailMicro 與 micro_tai_ratio)
+            const retailMicroVal = data.retailMicro !== undefined ? data.retailMicro : data.micro_tai_ratio;
+            if (retailMicroVal !== undefined && retailMicroVal !== null) {
+                const elem = document.getElementById('micro-tai-ratio');
+                const numVal = parseFloat(retailMicroVal);
+                elem.innerText = isNaN(numVal) ? `${retailMicroVal}%` : `${numVal >= 0 ? '+' : ''}${numVal}%`;
+                if (!isNaN(numVal)) {
+                    elem.className = numVal >= 20 ? 'text-3xl font-bold text-rose-600' : (numVal <= -20 ? 'text-3xl font-bold text-emerald-600' : 'text-3xl font-bold text-slate-900');
+                }
+            }
+
+            // 6. Put/Call 未平倉比 (支援 pcRatio 與 pc_ratio)
+            const pcVal = data.pcRatio !== undefined ? data.pcRatio : data.pc_ratio;
+            if (pcVal !== undefined && pcVal !== null) {
+                document.getElementById('pc-ratio').innerText = `${pcVal}%`;
+            }
+
+            // 7. 外資選擇權 (支援 optionCall / optionPut 與 opt_call / opt_put)
+            const callVal = data.optionCall !== undefined ? data.optionCall : data.opt_call;
+            if (callVal !== undefined && callVal !== null) document.getElementById('opt-call').innerText = callVal;
+
+            const putVal = data.optionPut !== undefined ? data.optionPut : data.opt_put;
+            if (putVal !== undefined && putVal !== null) document.getElementById('opt-put').innerText = putVal;
         }
 
         // 讀取 data.json
         fetch('data.json?v=' + new Date().getTime())
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) throw new Error('data.json 讀取失敗');
+                return res.json();
+            })
             .then(data => updateUI(data))
-            .catch(err => console.error('無法取得資料:', err));
+            .catch(err => console.error('無法讀取數據:', err));
     </script>
 </body>
 </html>
