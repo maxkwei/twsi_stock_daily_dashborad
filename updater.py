@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import time
 import requests
@@ -191,7 +192,24 @@ def fetch_retail():
 
 
 # ==========================================
-# 6. 主程序執行
+# 6. 選擇權 Put/Call 未平倉比（期交所官網）
+# ==========================================
+def fetch_pc_ratio():
+    """期交所「臺指選擇權 Put/Call Ratio」頁，表格第一列是最新一天。
+    欄位：日期、賣權成交量、買權成交量、成交量比率%、賣權未平倉量、買權未平倉量、未平倉量比率%。
+    回傳 (日期 YYYY-MM-DD, 未平倉量比率%)。"""
+    print("抓取 Put/Call 未平倉比 -> [期交所]")
+    html = requests.get("https://www.taifex.com.tw/cht/3/pcRatio", headers=HEADERS, timeout=15).text
+    for row in re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.S):
+        tds = [re.sub(r'<[^>]+>|\s+', '', x) for x in re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)]
+        if len(tds) >= 7 and re.match(r'20\d\d/\d+/\d+$', tds[0]):
+            date = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
+            return date, float(tds[6].replace(',', ''))
+    raise RuntimeError("期交所 P/C 頁面找不到資料列")
+
+
+# ==========================================
+# 7. 主程序執行
 # ==========================================
 def main():
     now_str = now_tw().strftime("%Y-%m-%d %H:%M")
@@ -213,6 +231,11 @@ def main():
     except Exception as e:
         print(f"  散戶多空比計算失敗: {e}")
         errors.append("散戶多空比")
+    try:
+        pc_date, pc_ratio = fetch_pc_ratio()
+    except Exception as e:
+        print(f"  Put/Call 未平倉比抓取失敗: {e}")
+        errors.append("Put/Call 未平倉比")
 
     # 任何一項失敗：不覆蓋 data.json，並以錯誤結束，讓 Actions 顯示失敗
     if errors:
@@ -236,14 +259,14 @@ def main():
         "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
         "retailSmall": retail[-1][1],
         "retailMicro": None,
-        "pcRatio": None,
+        "pcRatio": pc_ratio,
         "optionCall": None,
         "optionPut": None,
         "retailLong": None,
         "retailShort": None,
         "analysis": (f"資料日期 {data_date}，於 {now_str}（台灣時間）更新。來源：加權指數 {taiex_src}、"
-                     f"櫃買指數 {otc_src}、外資台指期與小台散戶多空比 FinMind。"
-                     "情緒指數、微台散戶、P/C ratio、外資選擇權、散戶多空口數尚未接資料。"),
+                     f"櫃買指數 {otc_src}、外資台指期與小台散戶多空比 FinMind、P/C 未平倉比 期交所（{pc_date}）。"
+                     "情緒指數、微台散戶、外資選擇權、散戶多空口數尚未接資料。"),
         "taiex": {
             "price": taiex_res["price"],
             "change": taiex_res["change"],
