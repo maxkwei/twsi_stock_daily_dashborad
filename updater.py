@@ -1,10 +1,8 @@
 import json
 import re
 import sys
-import time
 import requests
 import pandas as pd
-import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -15,6 +13,14 @@ HEADERS = {
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 # GitHub Actions 的機器是 UTC，時間一律換成台灣時間
 TW = ZoneInfo("Asia/Taipei")
+# 圖表顯示的交易日數；每天新增一根，最舊的一根往左移出
+CHART_DAYS = 90
+# 抓的日曆天數：要夠 CHART_DAYS + 60MA 暖身（約 150 個交易日）
+INDEX_FETCH_DAYS = 260
+RETAIL_FETCH_DAYS = 150
+
+UP_COLOR = '#de350b'     # 紅K
+DOWN_COLOR = '#1a1a1a'   # 黑K
 
 
 def now_tw():
@@ -32,24 +38,25 @@ def finmind(dataset, data_id, days=120):
 
 
 # ==========================================
-# 1. 通用 K 線處理（計算 20MA / 60MA 與顏色）
+# 1. 通用 K 線處理（開高低收、20MA / 60MA、成交量顏色）
 # ==========================================
-def build_kline_output(df, date_col='date', price_col='price', vol_col='volume'):
-    df[price_col] = df[price_col].astype(float)
-    df[vol_col] = df[vol_col].astype(float)
+def build_kline_output(df):
+    """df 需有 date, open, high, low, close, volume 欄位（volume 單位：億元）。
+    均線用全部抓到的資料計算，再取最後 CHART_DAYS 天輸出。"""
+    df = df.sort_values('date').drop_duplicates('date').reset_index(drop=True)
+    for col in ('open', 'high', 'low', 'close', 'volume'):
+        df[col] = df[col].astype(float)
 
-    df['ma20'] = df[price_col].rolling(window=20, min_periods=1).mean()
-    df['ma60'] = df[price_col].rolling(window=60, min_periods=1).mean()
+    df['ma20'] = df['close'].rolling(window=20, min_periods=1).mean()
+    df['ma60'] = df['close'].rolling(window=60, min_periods=1).mean()
 
-    df_recent = df.tail(60).copy()
-    prices = df_recent[price_col].tolist()
-    volumes = df_recent[vol_col].tolist()
-    volume_colors = ['#de350b' if i == 0 or prices[i] >= prices[i-1] else '#00875a' for i in range(len(prices))]
-    iso_dates = [str(d)[:10] for d in df_recent[date_col]]
-    date_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d in iso_dates]
+    recent = df.tail(CHART_DAYS)
+    iso_dates = [str(d)[:10] for d in recent['date']]
+    r2 = lambda col: [round(x, 2) for x in recent[col].tolist()]
 
-    latest_price = round(prices[-1], 2)
-    prev_price = round(prices[-2], 2)
+    closes = df['close'].tolist()
+    latest_price = round(closes[-1], 2)
+    prev_price = round(closes[-2], 2)
     change = round(latest_price - prev_price, 2)
     change_pct = round((change / prev_price) * 100, 2)
 
@@ -60,91 +67,44 @@ def build_kline_output(df, date_col='date', price_col='price', vol_col='volume')
         # 只給 main() 用（資料日期、散戶圖對齊），不寫進 data.json
         "isoDates": iso_dates,
         "chart": {
-            "dates": date_labels,
-            "prices": [round(x, 2) for x in df_recent[price_col].tolist()],
-            "ma20": [round(x, 2) for x in df_recent['ma20'].tolist()],
-            "ma60": [round(x, 2) for x in df_recent['ma60'].tolist()],
-            "volumes": [round(x, 2) for x in volumes],
-            "volumeColors": volume_colors
+            "dates": [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d in iso_dates],
+            "open": r2('open'),
+            "high": r2('high'),
+            "low": r2('low'),
+            "close": r2('close'),
+            # prices 與 close 相同，保留給舊欄位名稱
+            "prices": r2('close'),
+            "ma20": r2('ma20'),
+            "ma60": r2('ma60'),
+            "volumes": r2('volume'),
+            # 成交量顏色跟著當天 K 棒：收 >= 開為紅，否則黑
+            "volumeColors": [UP_COLOR if c >= o else DOWN_COLOR
+                             for o, c in zip(recent['open'], recent['close'])]
         }
     }
 
 
 # ==========================================
-# 2. 加權指數 (TAIEX) 三層備援抓取
+# 2. 加權指數／櫃買指數（開高低收），兩層備援
 # ==========================================
-def fetch_taiex():
-    # Level 1: 證交所 (TWSE)
-    print("抓取加權指數 -> [Level 1: 證交所 TWSE]")
+def fetch_index(name, finmind_id, yf_symbol):
+    # Level 1: FinMind（加權 TAIEX、櫃買 TPEx，有開高低收與成交金額）
+    print(f"抓取{name} -> [Level 1: FinMind {finmind_id}]")
     try:
-        all_data = []
-        today = now_tw()
-        for i in range(4):
-            t_date = (today - timedelta(days=i*28)).strftime("%Y%m01")
-            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?response=json&date={t_date}"
-            res = requests.get(url, headers=HEADERS, timeout=8).json()
-            if res.get("stat") == "OK":
-                for row in res["data"]:
-                    p = row[0].split('/')
-                    formatted_date = f"{int(p[0])+1911}-{p[1]}-{p[2]}"
-                    price = float(row[4].replace(',', ''))
-                    vol = float(row[2].replace(',', '')) / 100000000
-                    all_data.append({"date": formatted_date, "price": price, "volume": vol})
-            time.sleep(1)
-        if len(all_data) >= 30:
-            df = pd.DataFrame(all_data).drop_duplicates('date').sort_values('date').reset_index(drop=True)
-            return build_kline_output(df), "證交所"
-    except Exception as e:
-        print(f"  Level 1 失敗: {e}")
-
-    # Level 2: FinMind
-    print("抓取加權指數 -> [Level 2: FinMind]")
-    try:
-        df = pd.DataFrame(finmind("TaiwanStockPrice", "TAIEX"))
-        df['price'] = df['close']
-        df['volume'] = df['Trading_money'] / 100000000
-        return build_kline_output(df), "FinMind"
-    except Exception as e:
-        print(f"  Level 2 失敗: {e}")
-
-    # Level 3: yfinance
-    print("抓取加權指數 -> [Level 3: yfinance]")
-    try:
-        ticker = yf.Ticker("^TWII")
-        df = ticker.history(period="4mo").reset_index()
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df['price'] = df['Close']
-            df['volume'] = df['Volume'] / 100000000
-            return build_kline_output(df), "yfinance"
-    except Exception as e:
-        print(f"  Level 3 失敗: {e}")
-
-    return None, None
-
-
-# ==========================================
-# 3. 櫃買指數 (OTC) 兩層備援抓取
-# ==========================================
-def fetch_otc():
-    # Level 1: FinMind（櫃買指數在 FinMind 的代碼是 TPEx）
-    print("抓取櫃買指數 -> [Level 1: FinMind TPEx]")
-    try:
-        df = pd.DataFrame(finmind("TaiwanStockPrice", "TPEx"))
-        df['price'] = df['close']
+        df = pd.DataFrame(finmind("TaiwanStockPrice", finmind_id, days=INDEX_FETCH_DAYS))
+        df = df.rename(columns={'max': 'high', 'min': 'low'})
         df['volume'] = df['Trading_money'] / 100000000
         return build_kline_output(df), "FinMind"
     except Exception as e:
         print(f"  Level 1 失敗: {e}")
 
-    # Level 2: yfinance (^TWOII)
-    print("抓取櫃買指數 -> [Level 2: yfinance]")
+    # Level 2: yfinance（成交量單位與 FinMind 不同，只當備援）
+    print(f"抓取{name} -> [Level 2: yfinance {yf_symbol}]")
     try:
-        ticker = yf.Ticker("^TWOII")
-        df = ticker.history(period="4mo").reset_index()
+        df = yf.Ticker(yf_symbol).history(period="1y").reset_index()
         if not df.empty:
             df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df['price'] = df['Close']
+            df = df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'})
             df['volume'] = df['Volume'] / 100000000
             return build_kline_output(df), "yfinance"
     except Exception as e:
@@ -154,7 +114,7 @@ def fetch_otc():
 
 
 # ==========================================
-# 4. 外資台指期淨未平倉
+# 3. 外資台指期淨未平倉
 # ==========================================
 def fetch_foreign_futures():
     """外資台指期（TX）淨未平倉 = 多方未平倉口數 - 空方未平倉口數。回傳 (日期, 淨口數, 較前一日)。"""
@@ -169,30 +129,37 @@ def fetch_foreign_futures():
 
 
 # ==========================================
-# 5. 小台散戶多空比
+# 4. 小台散戶多空比與多空口數
 # ==========================================
 def fetch_retail():
-    """散戶多空比 = -(三大法人小台淨未平倉 / 小台全市場未平倉) * 100。
-    全市場未平倉只算一般交易時段（trading_session = position），所有月份加總。
-    回傳 [(日期, 多空比)]，依日期排序。"""
+    """全市場未平倉只算一般交易時段（trading_session = position），所有月份加總。
+    散戶多單 = 全市場未平倉 - 三大法人多方未平倉
+    散戶空單 = 全市場未平倉 - 三大法人空方未平倉
+    散戶多空比 = (散戶多單 - 散戶空單) / 全市場未平倉 * 100 = -(三大法人淨未平倉 / 全市場未平倉) * 100
+    回傳 [(日期, 多空比, 散戶多單, 散戶空單)]，依日期排序。"""
     print("抓取小台散戶多空比 -> [FinMind]")
-    inst_net = {}
-    for r in finmind("TaiwanFuturesInstitutionalInvestors", "MTX"):
-        inst_net[r["date"]] = inst_net.get(r["date"], 0) + \
-            r["long_open_interest_balance_volume"] - r["short_open_interest_balance_volume"]
+    inst_long, inst_short = {}, {}
+    for r in finmind("TaiwanFuturesInstitutionalInvestors", "MTX", days=RETAIL_FETCH_DAYS):
+        inst_long[r["date"]] = inst_long.get(r["date"], 0) + r["long_open_interest_balance_volume"]
+        inst_short[r["date"]] = inst_short.get(r["date"], 0) + r["short_open_interest_balance_volume"]
     total_oi = {}
-    for r in finmind("TaiwanFuturesDaily", "MTX"):
+    for r in finmind("TaiwanFuturesDaily", "MTX", days=RETAIL_FETCH_DAYS):
         if r.get("trading_session") == "position":
             total_oi[r["date"]] = total_oi.get(r["date"], 0) + r["open_interest"]
-    out = [(d, round(-100.0 * inst_net[d] / total_oi[d], 2))
-           for d in sorted(inst_net) if total_oi.get(d)]
+    out = []
+    for d in sorted(inst_long):
+        oi = total_oi.get(d)
+        if not oi:
+            continue
+        retail_long, retail_short = oi - inst_long[d], oi - inst_short[d]
+        out.append((d, round(100.0 * (retail_long - retail_short) / oi, 2), retail_long, retail_short))
     if not out:
         raise RuntimeError("小台法人與全市場未平倉沒有共同日期")
     return out
 
 
 # ==========================================
-# 6. 選擇權 Put/Call 未平倉比（期交所官網）
+# 5. 選擇權 Put/Call 未平倉比（期交所官網）
 # ==========================================
 def fetch_pc_ratio():
     """期交所「臺指選擇權 Put/Call Ratio」頁，表格第一列是最新一天。
@@ -209,13 +176,13 @@ def fetch_pc_ratio():
 
 
 # ==========================================
-# 7. 主程序執行
+# 6. 主程序執行
 # ==========================================
 def main():
     now_str = now_tw().strftime("%Y-%m-%d %H:%M")
 
-    taiex_res, taiex_src = fetch_taiex()
-    otc_res, otc_src = fetch_otc()
+    taiex_res, taiex_src = fetch_index("加權指數", "TAIEX", "^TWII")
+    otc_res, otc_src = fetch_index("櫃買指數", "TPEx", "^TWOII")
     errors = []
     if not taiex_res:
         errors.append("加權指數")
@@ -245,28 +212,30 @@ def main():
     # 資料日期以加權指數最後一個交易日為準（假日執行時不會把日期改成當天）
     data_date = taiex_res["isoDates"][-1]
 
-    retail = retail[-60:]
-    taiex_by_date = dict(zip(taiex_res["isoDates"], taiex_res["chart"]["prices"]))
+    retail = retail[-CHART_DAYS:]
+    taiex_by_date = dict(zip(taiex_res["isoDates"], taiex_res["chart"]["close"]))
+    retail_date, retail_ratio, retail_long, retail_short = retail[-1]
 
     final_data = {
         "date": data_date,
         "updateTime": now_str,
+        "chartDays": CHART_DAYS,
         # 以下尚未接資料，前端顯示「—」
         "sentiment": None,
         "sentimentStatus": "未計算",
         "foreignFutures": int(foreign_net),
         "foreignChange": int(foreign_change),
         "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
-        "retailSmall": retail[-1][1],
+        "retailSmall": retail_ratio,
         "retailMicro": None,
         "pcRatio": pc_ratio,
         "optionCall": None,
         "optionPut": None,
-        "retailLong": None,
-        "retailShort": None,
+        "retailLong": int(retail_long),
+        "retailShort": int(retail_short),
         "analysis": (f"資料日期 {data_date}，於 {now_str}（台灣時間）更新。來源：加權指數 {taiex_src}、"
-                     f"櫃買指數 {otc_src}、外資台指期與小台散戶多空比 FinMind、P/C 未平倉比 期交所（{pc_date}）。"
-                     "情緒指數、微台散戶、外資選擇權、散戶多空口數尚未接資料。"),
+                     f"櫃買指數 {otc_src}、外資台指期與小台散戶多空比 FinMind（{retail_date}）、"
+                     f"P/C 未平倉比 期交所（{pc_date}）。情緒指數、微台散戶、外資選擇權尚未接資料。"),
         "taiex": {
             "price": taiex_res["price"],
             "change": taiex_res["change"],
@@ -280,10 +249,10 @@ def main():
         "taiexChart": taiex_res["chart"],
         "otcChart": otc_res["chart"],
         "retailChart": {
-            "dates": [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d, _ in retail],
-            "retailRatios": [r for _, r in retail],
+            "dates": [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d, *_ in retail],
+            "retailRatios": [r for _, r, *_ in retail],
             # 依日期對齊加權指數；加權沒有那天的資料就留空
-            "indexValues": [taiex_by_date.get(d) for d, _ in retail]
+            "indexValues": [taiex_by_date.get(d) for d, *_ in retail]
         }
     }
 

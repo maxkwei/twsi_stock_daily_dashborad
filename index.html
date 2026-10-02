@@ -537,6 +537,8 @@
                     yIndex: {
                         type: 'linear',
                         position: 'right',
+                        // 依資料範圍縮放，不從 0 開始
+                        beginAtZero: false,
                         grid: { display: false },
                         ticks: { callback: v => v.toLocaleString() }
                     }
@@ -548,6 +550,17 @@
     // 通用指數 & 成交量圖表繪製函式
     function renderIndexChart(canvasId, chartData) {
         const ctx = document.getElementById(canvasId).getContext('2d');
+        const UP = '#de350b', DOWN = '#1a1a1a';
+        const n = chartData.dates.length;
+        const isUp = i => chartData.close[i] >= chartData.open[i];
+        const candleColors = [...Array(n).keys()].map(i => isUp(i) ? UP : DOWN);
+        // K 棒用兩組浮動長條畫：細的是最高～最低（影線），粗的是開～收（實體）
+        const wicks = [...Array(n).keys()].map(i => [chartData.low[i], chartData.high[i]]);
+        const bodies = [...Array(n).keys()].map(i => {
+            const o = chartData.open[i], c = chartData.close[i];
+            // 開收同價時給一點高度，十字線才看得到
+            return o === c ? [o - 0.0005 * o, c + 0.0005 * c] : [o, c];
+        });
 
         new Chart(ctx, {
             type: 'bar',
@@ -556,21 +569,13 @@
                 datasets: [
                     {
                         type: 'line',
-                        label: '指數',
-                        data: chartData.prices,
-                        borderColor: '#de350b',
-                        borderWidth: 1.5,
-                        pointRadius: 0,
-                        yAxisID: 'yPrice'
-                    },
-                    {
-                        type: 'line',
                         label: '20MA',
                         data: chartData.ma20,
                         borderColor: '#f5a623',
                         borderWidth: 1,
                         pointRadius: 0,
-                        yAxisID: 'yPrice'
+                        yAxisID: 'yPrice',
+                        order: 0
                     },
                     {
                         type: 'line',
@@ -579,38 +584,83 @@
                         borderColor: '#8b572a',
                         borderWidth: 1,
                         pointRadius: 0,
-                        yAxisID: 'yPrice'
+                        yAxisID: 'yPrice',
+                        order: 0
                     },
                     {
-                        type: 'bar',
+                        label: '影線',
+                        data: wicks,
+                        backgroundColor: candleColors,
+                        yAxisID: 'yPrice',
+                        grouped: false,
+                        barPercentage: 0.12,
+                        categoryPercentage: 1,
+                        order: 2
+                    },
+                    {
+                        label: 'K棒',
+                        data: bodies,
+                        backgroundColor: candleColors,
+                        yAxisID: 'yPrice',
+                        grouped: false,
+                        barPercentage: 0.7,
+                        categoryPercentage: 1,
+                        order: 1
+                    },
+                    {
                         label: '成交量',
                         data: chartData.volumes,
                         backgroundColor: chartData.volumeColors,
                         yAxisID: 'yVolume',
-                        barPercentage: 0.7
+                        grouped: false,
+                        barPercentage: 0.7,
+                        categoryPercentage: 1
                     }
                 ]
             },
             options: {
                 responsive: true,
                 interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        // 只顯示一筆開高低收＋均線＋成交量，不顯示影線/實體的原始區間
+                        filter: item => item.dataset.label !== '影線',
+                        callbacks: {
+                            label: item => {
+                                const i = item.dataIndex, f = v => v.toLocaleString();
+                                if (item.dataset.label === 'K棒') {
+                                    return `開 ${f(chartData.open[i])}  高 ${f(chartData.high[i])}  低 ${f(chartData.low[i])}  收 ${f(chartData.close[i])}`;
+                                }
+                                if (item.dataset.label === '成交量') return `成交金額 ${f(chartData.volumes[i])} 億`;
+                                return `${item.dataset.label} ${f(item.raw)}`;
+                            }
+                        }
+                    }
+                },
                 scales: {
-                    x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } },
-                    yPrice: {
-                        type: 'linear',
-                        position: 'left',
-                        stack: 'chart',
-                        stackWeight: 3,
-                        grid: { color: '#f0f0f0' }
-                    },
+                    x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+                    // 先宣告的堆疊在下方：成交量在下、價格在上
                     yVolume: {
                         type: 'linear',
                         position: 'left',
                         stack: 'chart',
                         stackWeight: 1,
+                        beginAtZero: true,
                         grid: { display: false },
                         ticks: { display: false }
+                    },
+                    yPrice: {
+                        type: 'linear',
+                        position: 'left',
+                        stack: 'chart',
+                        stackWeight: 3,
+                        offset: true,
+                        // 依資料範圍縮放，不從 0 開始
+                        beginAtZero: false,
+                        grace: '3%',
+                        grid: { color: '#f0f0f0' },
+                        ticks: { callback: v => v.toLocaleString() }
                     }
                 }
             }
