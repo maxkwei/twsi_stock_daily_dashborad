@@ -625,25 +625,34 @@
 
             // 更新基本文字資訊
             document.getElementById('data-date').innerText = '資料日期 ' + data.date;
-            document.getElementById('sentiment-val').innerText = data.sentiment;
+            // 尚未接資料的欄位是 null，一律顯示「—」，不顯示假數字
+            const NA = '—';
+            const num = v => v == null ? NA : v.toLocaleString();
+            const signedPct = v => v == null ? NA : (v >= 0 ? '+' : '') + v + '%';
+
+            document.getElementById('sentiment-val').innerText = data.sentiment == null ? NA : data.sentiment;
             document.getElementById('sentiment-status').innerText = data.sentimentStatus;
-            document.getElementById('gauge-pointer').style.left = data.sentiment + '%';
+            if (data.sentiment == null) {
+                document.getElementById('gauge-pointer').style.display = 'none';
+            } else {
+                document.getElementById('gauge-pointer').style.left = data.sentiment + '%';
+            }
 
             document.getElementById('foreign-futures').innerText = (data.foreignFutures < 0 ? '' : '+') + data.foreignFutures.toLocaleString() + ' 口';
             document.getElementById('foreign-change').innerText = `較昨日 ${data.foreignChange >= 0 ? '+' : ''}${data.foreignChange.toLocaleString()} 口 | ${data.foreignNote}`;
 
-            document.getElementById('retail-small').innerText = (data.retailSmall >= 0 ? '+' : '') + data.retailSmall + '%';
-            document.getElementById('retail-micro').innerText = (data.retailMicro >= 0 ? '+' : '') + data.retailMicro + '%';
-            document.getElementById('pc-ratio').innerText = data.pcRatio + '%';
+            document.getElementById('retail-small').innerText = signedPct(data.retailSmall);
+            document.getElementById('retail-micro').innerText = signedPct(data.retailMicro);
+            document.getElementById('pc-ratio').innerText = data.pcRatio == null ? NA : data.pcRatio + '%';
 
-            document.getElementById('foreign-options').innerText = `${data.optionCall.toLocaleString()} / ${data.optionPut.toLocaleString()}`;
+            document.getElementById('foreign-options').innerText = `${num(data.optionCall)} / ${num(data.optionPut)}`;
             document.getElementById('analysis-text').innerText = data.analysis;
             document.getElementById('update-time').innerText = '報表產出 ' + data.updateTime;
 
             // 圖表數據文字
-            document.getElementById('retail-long-val').innerText = data.retailLong.toLocaleString();
-            document.getElementById('retail-short-val').innerText = data.retailShort.toLocaleString();
-            document.getElementById('retail-small-chart-val').innerText = (data.retailSmall >= 0 ? '+' : '') + data.retailSmall + '%';
+            document.getElementById('retail-long-val').innerText = num(data.retailLong);
+            document.getElementById('retail-short-val').innerText = num(data.retailShort);
+            document.getElementById('retail-small-chart-val').innerText = signedPct(data.retailSmall);
 
             document.getElementById('taiex-price').innerText = data.taiex.price.toLocaleString();
             document.getElementById('taiex-change').innerText = `${data.taiex.change >= 0 ? '+' : ''}${data.taiex.change} (${data.taiex.changePercent}%)`;
