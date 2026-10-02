@@ -1,6 +1,6 @@
 {
     "date": "2026-10-01",
-    "updateTime": "2026-10-02 12:33",
+    "updateTime": "2026-10-02 12:34",
     "sentiment": null,
     "sentimentStatus": "未計算",
     "foreignFutures": -79554,
@@ -8,12 +8,12 @@
     "foreignNote": "外資台指期淨未平倉（2026-10-01）",
     "retailSmall": 14.3,
     "retailMicro": null,
-    "pcRatio": null,
+    "pcRatio": 82.54,
     "optionCall": null,
     "optionPut": null,
     "retailLong": null,
     "retailShort": null,
-    "analysis": "資料日期 2026-10-01，於 2026-10-02 12:33（台灣時間）更新。來源：加權指數 證交所、櫃買指數 FinMind、外資台指期與小台散戶多空比 FinMind。情緒指數、微台散戶、P/C ratio、外資選擇權、散戶多空口數尚未接資料。",
+    "analysis": "資料日期 2026-10-01，於 2026-10-02 12:34（台灣時間）更新。來源：加權指數 證交所、櫃買指數 FinMind、外資台指期與小台散戶多空比 FinMind、P/C 未平倉比 期交所（2026-10-01）。情緒指數、微台散戶、外資選擇權、散戶多空口數尚未接資料。",
     "taiex": {
         "price": 48353.49,
         "change": 413.36,
