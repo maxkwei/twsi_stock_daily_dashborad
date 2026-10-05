@@ -691,11 +691,17 @@
             document.getElementById('foreign-futures').innerText = (data.foreignFutures < 0 ? '' : '+') + data.foreignFutures.toLocaleString() + ' 口';
             document.getElementById('foreign-change').innerText = `較昨日 ${data.foreignChange >= 0 ? '+' : ''}${data.foreignChange.toLocaleString()} 口 | ${data.foreignNote}`;
 
+            // 數值顏色跟正負走：正（偏多）紅、負（偏空）綠
+            const signColor = (id, v) => { if (v != null) document.getElementById(id).style.color = v >= 0 ? 'var(--red-color)' : 'var(--green-color)'; };
+            const signedNum = v => v == null ? NA : (v >= 0 ? '+' : '') + v.toLocaleString();
             document.getElementById('retail-small').innerText = signedPct(data.retailSmall);
             document.getElementById('retail-micro').innerText = signedPct(data.retailMicro);
+            signColor('retail-small', data.retailSmall);
+            signColor('foreign-futures', data.foreignFutures);
+            signColor('retail-micro', data.retailMicro);
             document.getElementById('pc-ratio').innerText = data.pcRatio == null ? NA : data.pcRatio + '%';
 
-            document.getElementById('foreign-options').innerText = `${num(data.optionCall)} / ${num(data.optionPut)}`;
+            document.getElementById('foreign-options').innerText = `${signedNum(data.optionCall)} / ${signedNum(data.optionPut)}`;
             document.getElementById('analysis-text').innerText = data.analysis;
             document.getElementById('update-time').innerText = '報表產出 ' + data.updateTime;
 
@@ -703,6 +709,7 @@
             document.getElementById('retail-long-val').innerText = num(data.retailLong);
             document.getElementById('retail-short-val').innerText = num(data.retailShort);
             document.getElementById('retail-small-chart-val').innerText = signedPct(data.retailSmall);
+            signColor('retail-small-chart-val', data.retailSmall);
 
             document.getElementById('taiex-price').innerText = data.taiex.price.toLocaleString();
             document.getElementById('taiex-change').innerText = `${data.taiex.change >= 0 ? '+' : ''}${data.taiex.change} (${data.taiex.changePercent}%)`;

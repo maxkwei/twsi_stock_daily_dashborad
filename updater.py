@@ -18,6 +18,8 @@ CHART_DAYS = 90
 # 抓的日曆天數：要夠 CHART_DAYS + 60MA 暖身（約 150 個交易日）
 INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
+# 情緒指數百分位的比較基準：一年
+SENTIMENT_LOOKBACK_DAYS = 370
 
 UP_COLOR = '#de350b'     # 紅K
 DOWN_COLOR = '#1a1a1a'   # 黑K
@@ -117,33 +119,34 @@ def fetch_index(name, finmind_id, yf_symbol):
 # 3. 外資台指期淨未平倉
 # ==========================================
 def fetch_foreign_futures():
-    """外資台指期（TX）淨未平倉 = 多方未平倉口數 - 空方未平倉口數。回傳 (日期, 淨口數, 較前一日)。"""
+    """外資台指期（TX）淨未平倉 = 多方未平倉口數 - 空方未平倉口數。
+    回傳 (日期, 淨口數, 較前一日, 一年的淨口數序列)；序列給情緒指數排百分位用。"""
     print("抓取外資台指期淨未平倉 -> [FinMind]")
-    rows = [r for r in finmind("TaiwanFuturesInstitutionalInvestors", "TX", days=30)
+    rows = [r for r in finmind("TaiwanFuturesInstitutionalInvestors", "TX", days=SENTIMENT_LOOKBACK_DAYS)
             if r["institutional_investors"] == "外資"]
     rows.sort(key=lambda r: r["date"])
     if len(rows) < 2:
         raise RuntimeError("外資台指期資料不足兩天")
     net = [r["long_open_interest_balance_volume"] - r["short_open_interest_balance_volume"] for r in rows]
-    return rows[-1]["date"], net[-1], net[-1] - net[-2]
+    return rows[-1]["date"], net[-1], net[-1] - net[-2], net
 
 
 # ==========================================
 # 4. 小台散戶多空比與多空口數
 # ==========================================
-def fetch_retail():
+def fetch_retail(product="MTX", label="小台"):
     """全市場未平倉只算一般交易時段（trading_session = position），所有月份加總。
     散戶多單 = 全市場未平倉 - 三大法人多方未平倉
     散戶空單 = 全市場未平倉 - 三大法人空方未平倉
     散戶多空比 = (散戶多單 - 散戶空單) / 全市場未平倉 * 100 = -(三大法人淨未平倉 / 全市場未平倉) * 100
     回傳 [(日期, 多空比, 散戶多單, 散戶空單)]，依日期排序。"""
-    print("抓取小台散戶多空比 -> [FinMind]")
+    print(f"抓取{label}散戶多空比 -> [FinMind {product}]")
     inst_long, inst_short = {}, {}
-    for r in finmind("TaiwanFuturesInstitutionalInvestors", "MTX", days=RETAIL_FETCH_DAYS):
+    for r in finmind("TaiwanFuturesInstitutionalInvestors", product, days=RETAIL_FETCH_DAYS):
         inst_long[r["date"]] = inst_long.get(r["date"], 0) + r["long_open_interest_balance_volume"]
         inst_short[r["date"]] = inst_short.get(r["date"], 0) + r["short_open_interest_balance_volume"]
     total_oi = {}
-    for r in finmind("TaiwanFuturesDaily", "MTX", days=RETAIL_FETCH_DAYS):
+    for r in finmind("TaiwanFuturesDaily", product, days=RETAIL_FETCH_DAYS):
         if r.get("trading_session") == "position":
             total_oi[r["date"]] = total_oi.get(r["date"], 0) + r["open_interest"]
     out = []
@@ -154,7 +157,7 @@ def fetch_retail():
         retail_long, retail_short = oi - inst_long[d], oi - inst_short[d]
         out.append((d, round(100.0 * (retail_long - retail_short) / oi, 2), retail_long, retail_short))
     if not out:
-        raise RuntimeError("小台法人與全市場未平倉沒有共同日期")
+        raise RuntimeError(f"{label}法人與全市場未平倉沒有共同日期")
     return out
 
 
@@ -176,7 +179,99 @@ def fetch_pc_ratio():
 
 
 # ==========================================
-# 6. 主程序執行
+# 6. 外資台指選擇權淨未平倉
+# ==========================================
+def fetch_foreign_options():
+    """外資台指選擇權（TXO）買權、賣權各自的淨未平倉 = 多方未平倉口數 - 空方未平倉口數。
+    回傳 (日期, 買權淨口數, 賣權淨口數)。"""
+    print("抓取外資選擇權 -> [FinMind TXO]")
+    rows = [r for r in finmind("TaiwanOptionInstitutionalInvestors", "TXO", days=15)
+            if r["institutional_investors"] == "外資"]
+    if not rows:
+        raise RuntimeError("沒有外資選擇權資料")
+    last = max(r["date"] for r in rows)
+    net = {r["call_put"]: r["long_open_interest_balance_volume"] - r["short_open_interest_balance_volume"]
+           for r in rows if r["date"] == last}
+    if "買權" not in net or "賣權" not in net:
+        raise RuntimeError(f"{last} 外資選擇權缺買權或賣權")
+    return last, net["買權"], net["賣權"]
+
+
+# ==========================================
+# 7. 台股情緒指數（0~100，四項子分數平均，與凱基監控儀表板同一套方法）
+# ==========================================
+def percentile_rank(values, today):
+    return sum(1 for v in values if v <= today) / len(values) * 100
+
+
+def rsi(closes, n=6):
+    """Wilder 平滑的 RSI。"""
+    gains = [max(closes[i] - closes[i - 1], 0) for i in range(1, len(closes))]
+    losses = [max(closes[i - 1] - closes[i], 0) for i in range(1, len(closes))]
+    if len(gains) < n:
+        raise RuntimeError("收盤價不足以計算 RSI")
+    avg_g, avg_l = sum(gains[:n]) / n, sum(losses[:n]) / n
+    for g, l in zip(gains[n:], losses[n:]):
+        avg_g = (avg_g * (n - 1) + g) / n
+        avg_l = (avg_l * (n - 1) + l) / n
+    return 100.0 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l)
+
+
+def fetch_breadth(day):
+    """證交所每日收盤行情「漲跌證券數合計」表的股票欄：上漲／下跌家數。"""
+    print("抓取漲跌家數 -> [證交所]")
+    res = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+                       params={"date": day.replace("-", ""), "type": "MS", "response": "json"},
+                       headers=HEADERS, timeout=15).json()
+    for t in res.get("tables", []):
+        if "漲跌證券數合計" in t.get("title", ""):
+            col = t["fields"].index("股票")
+            cnt = {row[0][:2]: int(row[col].split("(")[0].replace(",", "")) for row in t["data"]}
+            return cnt["上漲"], cnt["下跌"]
+    raise RuntimeError(f"證交所 {day} 沒有漲跌家數表")
+
+
+def fetch_institutional_flow():
+    """三大法人現貨買賣超金額（FinMind total 列，元）。回傳 [(日期, 淨額)]。"""
+    print("抓取三大法人買賣超 -> [FinMind]")
+    rows = [r for r in finmind("TaiwanStockTotalInstitutionalInvestors", "", days=SENTIMENT_LOOKBACK_DAYS)
+            if r["name"] == "total"]
+    return sorted((r["date"], r["buy"] - r["sell"]) for r in rows)
+
+
+def compute_sentiment(data_date, taiex_closes, foreign_series):
+    """子分數：漲跌家數比、大盤 RSI(6)、三大法人買賣超（一年百分位）、外資台指期淨未平倉（一年百分位）。
+    任何一項抓不到就略過，用其餘子分數平均；回傳 (分數, 標籤, 子分數 dict, 說明)。"""
+    scores, notes = {}, []
+    try:
+        adv, dec = fetch_breadth(data_date)
+        scores["漲跌家數"] = adv / (adv + dec) * 100
+        notes.append(f"漲{adv}跌{dec}")
+    except Exception as e:
+        print(f"  漲跌家數失敗: {e}")
+    try:
+        scores["大盤RSI"] = rsi(taiex_closes)
+    except Exception as e:
+        print(f"  RSI 失敗: {e}")
+    try:
+        flow = fetch_institutional_flow()
+        scores["三大法人"] = percentile_rank([v for _, v in flow], flow[-1][1])
+        notes.append(f"法人{flow[-1][1] / 1e8:+.0f}億（{flow[-1][0]}）")
+    except Exception as e:
+        print(f"  三大法人失敗: {e}")
+    if foreign_series:
+        scores["外資期貨"] = percentile_rank(foreign_series, foreign_series[-1])
+    if not scores:
+        return None, "未計算", {}, ""
+    composite = round(sum(scores.values()) / len(scores), 1)
+    label = ("極度恐懼" if composite < 25 else "恐懼" if composite < 45 else "中性" if composite < 55
+             else "貪婪" if composite < 75 else "極度貪婪")
+    detail = "、".join(f"{k} {v:.0f}" for k, v in scores.items())
+    return composite, label, scores, f"{detail}（{'；'.join(notes)}）" if notes else detail
+
+
+# ==========================================
+# 8. 主程序執行
 # ==========================================
 def main():
     now_str = now_tw().strftime("%Y-%m-%d %H:%M")
@@ -189,15 +284,25 @@ def main():
     if not otc_res:
         errors.append("櫃買指數")
     try:
-        foreign_date, foreign_net, foreign_change = fetch_foreign_futures()
+        foreign_date, foreign_net, foreign_change, foreign_series = fetch_foreign_futures()
     except Exception as e:
         print(f"  外資台指期抓取失敗: {e}")
         errors.append("外資台指期")
     try:
-        retail = fetch_retail()
+        retail = fetch_retail("MTX", "小台")
     except Exception as e:
-        print(f"  散戶多空比計算失敗: {e}")
-        errors.append("散戶多空比")
+        print(f"  小台散戶多空比計算失敗: {e}")
+        errors.append("小台散戶多空比")
+    try:
+        micro = fetch_retail("TMF", "微台")
+    except Exception as e:
+        print(f"  微台散戶多空比計算失敗: {e}")
+        errors.append("微台散戶多空比")
+    try:
+        opt_date, opt_call, opt_put = fetch_foreign_options()
+    except Exception as e:
+        print(f"  外資選擇權抓取失敗: {e}")
+        errors.append("外資選擇權")
     try:
         pc_date, pc_ratio = fetch_pc_ratio()
     except Exception as e:
@@ -215,27 +320,31 @@ def main():
     retail = retail[-CHART_DAYS:]
     taiex_by_date = dict(zip(taiex_res["isoDates"], taiex_res["chart"]["close"]))
     retail_date, retail_ratio, retail_long, retail_short = retail[-1]
+    micro_date, micro_ratio = micro[-1][0], micro[-1][1]
+    # 情緒指數的子分數個別失敗時只略過該項，不擋整份更新
+    sentiment, sentiment_label, _, sentiment_detail = compute_sentiment(
+        data_date, taiex_res["chart"]["close"], foreign_series)
 
     final_data = {
         "date": data_date,
         "updateTime": now_str,
         "chartDays": CHART_DAYS,
-        # 以下尚未接資料，前端顯示「—」
-        "sentiment": None,
-        "sentimentStatus": "未計算",
+        "sentiment": sentiment,
+        "sentimentStatus": sentiment_label,
         "foreignFutures": int(foreign_net),
         "foreignChange": int(foreign_change),
         "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
         "retailSmall": retail_ratio,
-        "retailMicro": None,
+        "retailMicro": micro_ratio,
         "pcRatio": pc_ratio,
-        "optionCall": None,
-        "optionPut": None,
+        "optionCall": int(opt_call),
+        "optionPut": int(opt_put),
         "retailLong": int(retail_long),
         "retailShort": int(retail_short),
         "analysis": (f"資料日期 {data_date}，於 {now_str}（台灣時間）更新。來源：加權指數 {taiex_src}、"
-                     f"櫃買指數 {otc_src}、外資台指期與小台散戶多空比 FinMind（{retail_date}）、"
-                     f"P/C 未平倉比 期交所（{pc_date}）。情緒指數、微台散戶、外資選擇權尚未接資料。"),
+                     f"櫃買指數 {otc_src}、外資台指期與小台／微台散戶多空比 FinMind（{retail_date}／{micro_date}）、"
+                     f"外資選擇權 FinMind（{opt_date}）、P/C 未平倉比 期交所（{pc_date}）。"
+                     f"情緒指數子分數：{sentiment_detail}。"),
         "taiex": {
             "price": taiex_res["price"],
             "change": taiex_res["change"],
