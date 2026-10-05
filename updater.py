@@ -19,7 +19,9 @@ CHART_DAYS = 90
 INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
 # 情緒指數百分位的比較基準：一年
-SENTIMENT_LOOKBACK_DAYS = 370
+SENTIMENT_LOOKBACK_DAYS = 400
+# 百分位只取最近 250 個交易日（約一年），與凱基監控儀表板相同
+RANK_WINDOW = 250
 
 UP_COLOR = '#de350b'     # 紅K
 DOWN_COLOR = '#1a1a1a'   # 黑K
@@ -218,8 +220,10 @@ def rsi(closes, n=6):
 
 
 def fetch_breadth(day):
-    """證交所每日收盤行情「漲跌證券數合計」表的股票欄：上漲／下跌家數。"""
-    print("抓取漲跌家數 -> [證交所]")
+    """上市＋上櫃股票的上漲／下跌家數。
+    上市：證交所每日收盤行情「漲跌證券數合計」表的股票欄；上櫃：櫃買中心「上櫃股票當日彙總資訊」。
+    回傳 (上漲, 下跌, 說明)。"""
+    print("抓取漲跌家數 -> [證交所＋櫃買中心]")
     res = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
                        params={"date": day.replace("-", ""), "type": "MS", "response": "json"},
                        headers=HEADERS, timeout=15).json()
@@ -227,8 +231,21 @@ def fetch_breadth(day):
         if "漲跌證券數合計" in t.get("title", ""):
             col = t["fields"].index("股票")
             cnt = {row[0][:2]: int(row[col].split("(")[0].replace(",", "")) for row in t["data"]}
-            return cnt["上漲"], cnt["下跌"]
-    raise RuntimeError(f"證交所 {day} 沒有漲跌家數表")
+            break
+    else:
+        raise RuntimeError(f"證交所 {day} 沒有漲跌家數表")
+    y, m, d = day.split("-")
+    otc = requests.get("https://www.tpex.org.tw/web/stock/aftertrading/market_highlight/highlight_result.php",
+                       params={"l": "zh-tw", "d": f"{int(y) - 1911}/{m}/{d}", "o": "json"},
+                       headers=HEADERS, timeout=15).json()
+    tbl = next((t for t in otc.get("tables", []) if t.get("data")), None)
+    if tbl is None:
+        raise RuntimeError(f"櫃買中心 {day} 沒有彙總資訊")
+    row, f = tbl["data"][0], tbl["fields"]
+    o_up = int(row[f.index("上漲家數")].replace(",", ""))
+    o_dn = int(row[f.index("下跌家數")].replace(",", ""))
+    return (cnt["上漲"] + o_up, cnt["下跌"] + o_dn,
+            f"上市 {cnt['上漲']}／{cnt['下跌']}＋上櫃 {o_up}／{o_dn}")
 
 
 def fetch_institutional_flow():
@@ -244,10 +261,10 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
     任何一項抓不到就略過，用其餘子分數平均；回傳 (分數, 標籤, 子分數 dict, 說明, 子分數明細)。"""
     scores, notes, details = {}, [], {}
     try:
-        adv, dec = fetch_breadth(data_date)
+        adv, dec, src = fetch_breadth(data_date)
         scores["漲跌家數"] = adv / (adv + dec) * 100
         notes.append(f"漲{adv}跌{dec}")
-        details["漲跌家數"] = f"漲 {adv}／跌 {dec}"
+        details["漲跌家數"] = f"漲 {adv}／跌 {dec}（{src}）"
     except Exception as e:
         print(f"  漲跌家數失敗: {e}")
     try:
@@ -257,13 +274,13 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
         print(f"  RSI 失敗: {e}")
     try:
         flow = fetch_institutional_flow()
-        scores["三大法人"] = percentile_rank([v for _, v in flow], flow[-1][1])
+        scores["三大法人"] = percentile_rank([v for _, v in flow][-RANK_WINDOW:], flow[-1][1])
         notes.append(f"法人{flow[-1][1] / 1e8:+.0f}億（{flow[-1][0]}）")
         details["三大法人"] = f"買賣超 {flow[-1][1] / 1e8:+,.0f} 億・一年排名"
     except Exception as e:
         print(f"  三大法人失敗: {e}")
     if foreign_series:
-        scores["外資期貨"] = percentile_rank(foreign_series, foreign_series[-1])
+        scores["外資期貨"] = percentile_rank(foreign_series[-RANK_WINDOW:], foreign_series[-1])
         details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
     if not scores:
         return None, "未計算", {}, "", []
