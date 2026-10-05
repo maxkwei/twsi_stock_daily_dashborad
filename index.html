@@ -231,6 +231,12 @@
         }
 
         /* 格線系統 */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
         .grid-3 {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
@@ -362,8 +368,8 @@
         <div class="card-subtext" id="foreign-change">較昨日 -- 口 | ----</div>
     </div>
 
-    <!-- 3. 三欄指標卡片 -->
-    <div class="grid-3">
+    <!-- 3. 散戶多空比：小台／微台 -->
+    <div class="grid-2">
         <div class="card">
             <div class="card-title">散戶小台多空比</div>
             <div class="card-value red" id="retail-small">--%</div>
@@ -374,18 +380,20 @@
             <div class="card-value red" id="retail-micro">--%</div>
             <div class="card-subtext">≥20% 過熱（反指標）</div>
         </div>
+    </div>
+
+    <!-- 4. 選擇權：Put/Call 未平倉比／外資選擇權 -->
+    <div class="grid-2">
         <div class="card">
             <div class="card-title">Put/Call 未平倉比</div>
             <div class="card-value" id="pc-ratio">--%</div>
             <div class="card-subtext">>100% 偏多防護</div>
         </div>
-    </div>
-
-    <!-- 4. 外資選擇權 -->
-    <div class="card">
-        <div class="card-title">外資選擇權 (Call / Put 淨OI)</div>
-        <div class="card-value" style="font-size: 22px;" id="foreign-options">-- / --</div>
-        <div class="card-subtext">口數；正值 = 偏買方</div>
+        <div class="card">
+            <div class="card-title">外資選擇權 (Call / Put 淨OI)</div>
+            <div class="card-value" style="font-size: 22px;" id="foreign-options">-- / --</div>
+            <div class="card-subtext">口數；正值 = 偏買方</div>
+        </div>
     </div>
 
     <!-- 5. 交叉判讀 -->
