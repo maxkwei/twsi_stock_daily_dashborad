@@ -115,6 +115,21 @@
             font-size: 13px;
         }
 
+        /* 半圓指針儀表（2026-10-05） */
+        .sentiment-card { border-top: 5px solid #dfe1e6; }
+        .sentiment-gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+        .sentiment-gauge-wrap svg { width: 100%; max-width: 320px; height: auto; }
+        .sentiment-readout { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-top: -6px; }
+        .sentiment-readout .sentiment-value { font-size: 40px; }
+        .sentiment-sub-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+        @media (max-width: 560px) { .sentiment-sub-grid { grid-template-columns: repeat(2, 1fr); } }
+        .sentiment-sub { background: #f8f9fb; border-radius: 8px; padding: 8px 10px; }
+        .sentiment-sub .ss-name { font-size: 12px; color: var(--text-sub); }
+        .sentiment-sub .ss-score { font-size: 20px; font-weight: 800; line-height: 1.3; }
+        .sentiment-sub .ss-bar { height: 4px; border-radius: 2px; background: #e9ebf0; overflow: hidden; margin: 2px 0 4px; }
+        .sentiment-sub .ss-bar > div { height: 100%; }
+        .sentiment-sub .ss-detail { font-size: 11px; color: var(--text-sub); }
+
         .gauge-bar-container {
             display: flex;
             flex-direction: column;
@@ -318,27 +333,26 @@
     </div>
 
     <!-- 1. 恐懼與貪婪情緒卡片 -->
-    <div class="sentiment-card">
-        <div class="sentiment-header">
-            <div>
-                <div class="sentiment-label">台股情緒指數</div>
-                <div class="sentiment-score-box">
-                    <span class="sentiment-value" id="sentiment-val">--.-</span>
-                    <span style="font-size: 12px; color: var(--text-sub);">/100</span>
-                </div>
-            </div>
-            <div class="sentiment-badge" id="sentiment-status">載入中...</div>
-        </div>
-        <div class="gauge-bar-container">
-            <div class="gauge-bar">
-                <div class="gauge-pointer" id="gauge-pointer" style="left: 50%;"></div>
-            </div>
-            <div class="gauge-labels">
-                <span>0 恐懼</span>
-                <span>50 中性</span>
-                <span>100 貪婪</span>
+    <div class="sentiment-card" id="sentiment-card">
+        <div class="sentiment-label">台股情緒指數</div>
+        <div class="sentiment-gauge-wrap">
+            <svg viewBox="0 0 240 140" role="img" aria-label="台股情緒指數半圓儀表">
+                <g id="gauge-bands" fill="none" stroke-width="20"></g>
+                <g font-size="10" fill="#6b778c" text-anchor="middle">
+                    <text x="22" y="134">0</text>
+                    <text x="120" y="12">50</text>
+                    <text x="218" y="134">100</text>
+                </g>
+                <line id="gauge-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
+                <circle cx="120" cy="120" r="8" fill="#091e42"/>
+            </svg>
+            <div class="sentiment-readout">
+                <span class="sentiment-value" id="sentiment-val">--.-</span>
+                <span style="font-size: 12px; color: var(--text-sub);">/100</span>
+                <span class="sentiment-badge" id="sentiment-status">載入中...</span>
             </div>
         </div>
+        <div class="sentiment-sub-grid" id="sentiment-subs"></div>
     </div>
 
     <!-- 2. 外資台指期淨未平倉 -->
@@ -667,6 +681,57 @@
         });
     }
 
+    // 情緒指數顏色：0 綠 → 50 黃 → 100 紅（跟原本的漸層條同一組顏色）
+    function sentimentColor(v) {
+        const g = [54, 179, 126], y = [255, 171, 0], r = [255, 86, 48];
+        const t = Math.max(0, Math.min(100, v)) / 50;
+        const [a, b, k] = t <= 1 ? [g, y, t] : [y, r, t - 1];
+        return `rgb(${a.map((c, i) => Math.round(c + (b[i] - c) * k)).join(',')})`;
+    }
+
+    // 半圓上 value（0~100）對應的座標：0 在左、100 在右，圓心 (120,120)、半徑 90
+    function arcPoint(v, radius = 90) {
+        const ang = Math.PI * (1 - v / 100);
+        return [120 + radius * Math.cos(ang), 120 - radius * Math.sin(ang)];
+    }
+
+    function renderSentiment(data) {
+        // 底色分段：極度恐懼／恐懼／中性／貪婪／極度貪婪（與標籤門檻一致）
+        const bands = [[0, 25], [25, 45], [45, 55], [55, 75], [75, 100]];
+        document.getElementById('gauge-bands').innerHTML = bands.map(([a, b]) => {
+            const [x1, y1] = arcPoint(a), [x2, y2] = arcPoint(b);
+            return `<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} A 90 90 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${sentimentColor((a + b) / 2)}"/>`;
+        }).join('');
+
+        const v = data.sentiment;
+        const valEl = document.getElementById('sentiment-val');
+        const badge = document.getElementById('sentiment-status');
+        const needle = document.getElementById('gauge-needle');
+        badge.innerText = data.sentimentStatus;
+        if (v == null) {
+            valEl.innerText = '—';
+            needle.style.display = 'none';
+        } else {
+            const color = sentimentColor(v);
+            valEl.innerText = v;
+            valEl.style.color = color;
+            badge.style.background = color;
+            badge.style.borderColor = color;
+            badge.style.color = '#fff';
+            document.getElementById('sentiment-card').style.borderTopColor = color;
+            needle.style.transform = `rotate(${(v - 50) * 1.8}deg)`;
+        }
+
+        const subs = data.sentimentScores || [];
+        document.getElementById('sentiment-subs').innerHTML = subs.map(s => `
+            <div class="sentiment-sub">
+                <div class="ss-name">${s.name}</div>
+                <div class="ss-score" style="color:${sentimentColor(s.score)}">${s.score.toFixed(0)}</div>
+                <div class="ss-bar"><div style="width:${s.score}%;background:${sentimentColor(s.score)}"></div></div>
+                <div class="ss-detail">${s.detail}</div>
+            </div>`).join('');
+    }
+
     async function loadDashboardData() {
         try {
             const res = await fetch('./data.json?t=' + new Date().getTime());
@@ -680,13 +745,7 @@
             const num = v => v == null ? NA : v.toLocaleString();
             const signedPct = v => v == null ? NA : (v >= 0 ? '+' : '') + v + '%';
 
-            document.getElementById('sentiment-val').innerText = data.sentiment == null ? NA : data.sentiment;
-            document.getElementById('sentiment-status').innerText = data.sentimentStatus;
-            if (data.sentiment == null) {
-                document.getElementById('gauge-pointer').style.display = 'none';
-            } else {
-                document.getElementById('gauge-pointer').style.left = data.sentiment + '%';
-            }
+            renderSentiment(data);
 
             document.getElementById('foreign-futures').innerText = (data.foreignFutures < 0 ? '' : '+') + data.foreignFutures.toLocaleString() + ' 口';
             document.getElementById('foreign-change').innerText = `較昨日 ${data.foreignChange >= 0 ? '+' : ''}${data.foreignChange.toLocaleString()} 口 | ${data.foreignNote}`;

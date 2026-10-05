@@ -241,33 +241,38 @@ def fetch_institutional_flow():
 
 def compute_sentiment(data_date, taiex_closes, foreign_series):
     """子分數：漲跌家數比、大盤 RSI(6)、三大法人買賣超（一年百分位）、外資台指期淨未平倉（一年百分位）。
-    任何一項抓不到就略過，用其餘子分數平均；回傳 (分數, 標籤, 子分數 dict, 說明)。"""
-    scores, notes = {}, []
+    任何一項抓不到就略過，用其餘子分數平均；回傳 (分數, 標籤, 子分數 dict, 說明, 子分數明細)。"""
+    scores, notes, details = {}, [], {}
     try:
         adv, dec = fetch_breadth(data_date)
         scores["漲跌家數"] = adv / (adv + dec) * 100
         notes.append(f"漲{adv}跌{dec}")
+        details["漲跌家數"] = f"漲 {adv}／跌 {dec}"
     except Exception as e:
         print(f"  漲跌家數失敗: {e}")
     try:
         scores["大盤RSI"] = rsi(taiex_closes)
+        details["大盤RSI"] = "加權指數 RSI(6)"
     except Exception as e:
         print(f"  RSI 失敗: {e}")
     try:
         flow = fetch_institutional_flow()
         scores["三大法人"] = percentile_rank([v for _, v in flow], flow[-1][1])
         notes.append(f"法人{flow[-1][1] / 1e8:+.0f}億（{flow[-1][0]}）")
+        details["三大法人"] = f"買賣超 {flow[-1][1] / 1e8:+,.0f} 億・一年排名"
     except Exception as e:
         print(f"  三大法人失敗: {e}")
     if foreign_series:
         scores["外資期貨"] = percentile_rank(foreign_series, foreign_series[-1])
+        details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
     if not scores:
-        return None, "未計算", {}, ""
+        return None, "未計算", {}, "", []
     composite = round(sum(scores.values()) / len(scores), 1)
     label = ("極度恐懼" if composite < 25 else "恐懼" if composite < 45 else "中性" if composite < 55
              else "貪婪" if composite < 75 else "極度貪婪")
     detail = "、".join(f"{k} {v:.0f}" for k, v in scores.items())
-    return composite, label, scores, f"{detail}（{'；'.join(notes)}）" if notes else detail
+    items = [{"name": k, "score": round(v, 1), "detail": details.get(k, "")} for k, v in scores.items()]
+    return composite, label, scores, f"{detail}（{'；'.join(notes)}）" if notes else detail, items
 
 
 # ==========================================
@@ -322,7 +327,7 @@ def main():
     retail_date, retail_ratio, retail_long, retail_short = retail[-1]
     micro_date, micro_ratio = micro[-1][0], micro[-1][1]
     # 情緒指數的子分數個別失敗時只略過該項，不擋整份更新
-    sentiment, sentiment_label, _, sentiment_detail = compute_sentiment(
+    sentiment, sentiment_label, _, sentiment_detail, sentiment_items = compute_sentiment(
         data_date, taiex_res["chart"]["close"], foreign_series)
 
     final_data = {
@@ -331,6 +336,7 @@ def main():
         "chartDays": CHART_DAYS,
         "sentiment": sentiment,
         "sentimentStatus": sentiment_label,
+        "sentimentScores": sentiment_items,
         "foreignFutures": int(foreign_net),
         "foreignChange": int(foreign_change),
         "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
