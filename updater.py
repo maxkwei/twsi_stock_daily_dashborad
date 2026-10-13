@@ -4,6 +4,7 @@ import sys
 import requests
 import pandas as pd
 import yfinance as yf
+import streamlit as st
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -396,3 +397,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+st.title('台股每日籌碼與財報強勢股 Dashboard')
+
+# 讀取剛剛選股程式產生的雙效合擊清單
+try:
+  df_super = pd.read_csv('dashboard_super_stocks.csv', index_col=0)
+  st.subheader('🏆 雙效合擊強勢股（外資投信買超 + 優質財報）')
+  st.dataframe(df_super)
+except FileNotFoundError:
+  st.warning('尚未找到選股資料，請先執行選股腳本或等待 GitHub
