@@ -31,3 +31,17 @@ jobs:
           git add data.json
           git commit -m "Auto update stock data" || exit 0
           git push
+
+
+
+# --- 新增這一段：安裝選股套件與執行選股腳本 ---
+      - name: Install FinLab
+        run: pip install finlab
+
+      - name: Run Stock Screener
+        env:
+          FINLAB_TOKEN: ${{ secrets.FINLAB_TOKEN }}
+        run: |
+          python stock_screener.py
+      # ---------------------------------------------
+
