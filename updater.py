@@ -4,7 +4,7 @@ import sys
 import requests
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+#import streamlit as st
 # datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
