@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 import yfinance as yf
 #import streamlit as st
-datetime import datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 HEADERS = {
