@@ -318,7 +318,7 @@
         <div class="sentiment-sub-grid" id="sentiment-subs"></div>
     </div>
 
-    <!-- 1.5 美股 VIX 半圓儀表卡片（與台股情緒半圓同款） -->
+    <!-- 1.5 美股 VIX 情緒半圓（恐慌反向映射） -->
     <div class="sentiment-card" id="us-vix-gauge-card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <span class="sentiment-label">美股 VIX 情緒半圓（恐慌反向映射）</span>
@@ -342,6 +342,24 @@
             </div>
         </div>
         <div class="card-subtext" id="vix-gauge-meta" style="text-align:center;">VIX 指數 --.--（--）</div>
+    </div>
+
+    <!-- 1.6 美股 VIX 波動率指數 (90日) 緊接在美股 VIX 情緒半圓下方 -->
+    <div class="card" id="us-vix-90d-card" style="display: none;">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">美股 VIX 波動率指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
+                <div class="chart-legend" style="margin-top: 4px;">
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
+                </div>
+            </div>
+            <div class="chart-info-box">
+                <div id="us-vix-90d-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">--.--</div>
+                <div id="us-vix-90d-change" style="font-size: 12px;">+0.00 (+0.00%)</div>
+            </div>
+        </div>
+        <canvas id="usVix90dChart" height="170"></canvas>
     </div>
 
     <!-- 2. 外資台指期淨未平倉 -->
@@ -433,24 +451,6 @@
             <div class="card-value red" id="retail-small-chart-val">+0.00%</div>
         </div>
         <canvas id="retailOverlayChart" height="180"></canvas>
-    </div>
-
-    <!-- 📈 可選圖表：美股 VIX 波動率指數 (90日) 放在下方 -->
-    <div class="card" id="us-vix-90d-card" style="display: none;">
-        <div class="chart-header">
-            <div>
-                <div class="card-title" style="margin: 0;">美股 VIX 波動率指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
-                <div class="chart-legend" style="margin-top: 4px;">
-                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
-                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
-                </div>
-            </div>
-            <div class="chart-info-box">
-                <div id="us-vix-90d-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">--.--</div>
-                <div id="us-vix-90d-change" style="font-size: 12px;">+0.00 (+0.00%)</div>
-            </div>
-        </div>
-        <canvas id="usVix90dChart" height="170"></canvas>
     </div>
 
     <!-- 📚 籌碼分析指南與教學 -->
@@ -773,7 +773,8 @@
     function renderSentiment(data) {
         renderSemiGauge('gauge-bands', 'gauge-needle', 'sentiment-val', 'sentiment-status', 'sentiment-card', data.sentiment, data.sentimentStatus);
 
-        const subs = data.sentimentScores || [];
+        // 移除重複的美股VIX子卡片，只保留其餘台股情緒子指標
+        const subs = (data.sentimentScores || []).filter(s => s.name !== '美股VIX');
         document.getElementById('sentiment-subs').innerHTML = subs.map(s => `
             <div class="sentiment-sub">
                 <div class="ss-name">${s.name}</div>
