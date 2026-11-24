@@ -14,20 +14,15 @@ HEADERS = {
     )
 }
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
-# GitHub Actions 的機器是 UTC，時間一律換成台灣時間
 TW = ZoneInfo("Asia/Taipei")
-# 圖表顯示的交易日數；每天新增一根，最舊的一根往左移出
 CHART_DAYS = 90
-# 抓的日曆天數：要夠 CHART_DAYS + 60MA 暖身（約 150 個交易日）
 INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
-# 情緒指數百分位的比較基準：一年
 SENTIMENT_LOOKBACK_DAYS = 400
-# 百分位只取最近 250 個交易日（約一年）
 RANK_WINDOW = 250
 
-UP_COLOR = "#de350b"  # 紅K
-DOWN_COLOR = "#1a1a1a"  # 黑K
+UP_COLOR = "#de350b"
+DOWN_COLOR = "#1a1a1a"
 
 
 def now_tw():
@@ -55,12 +50,8 @@ def finmind(dataset, data_id, days=120):
   return res["data"]
 
 
-# ==========================================
-# 1. 通用 K 線處理（開高低收、20MA / 60MA、成交量顏色）
-# ==========================================
 def build_kline_output(df):
-  """df 需有 date, open, high, low, close, volume 欄位（volume 單位：億元）。
-    均線用全部抓到的資料計算，再取最後 CHART_DAYS 天輸出。"""
+  """df 需有 date, open, high, low, close, volume 欄位（volume 單位：億元）。"""
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
   for col in ("open", "high", "low", "close", "volume"):
     df[col] = df[col].astype(float)
@@ -82,7 +73,6 @@ def build_kline_output(df):
       "price": latest_price,
       "change": change,
       "changePercent": change_pct,
-      # 只給 main() 用（資料日期、散戶圖對齊），不寫進 data.json
       "isoDates": iso_dates,
       "chart": {
           "dates": [
@@ -105,9 +95,6 @@ def build_kline_output(df):
   }
 
 
-# ==========================================
-# 2. 加權指數／櫃買指數（開高低收），兩層備援
-# ==========================================
 def fetch_index(name, finmind_id, yf_symbol):
   print(f"抓取{name} -> [Level 1: FinMind {finmind_id}]")
   try:
@@ -141,9 +128,6 @@ def fetch_index(name, finmind_id, yf_symbol):
   return None, None
 
 
-# ==========================================
-# 3. 外資台指期淨未平倉
-# ==========================================
 def fetch_foreign_futures():
   print("抓取外資台指期淨未平倉 -> [FinMind]")
   rows = [
@@ -166,9 +150,6 @@ def fetch_foreign_futures():
   return rows[-1]["date"], net[-1], net[-1] - net[-2], net
 
 
-# ==========================================
-# 4. 小台／微台散戶多空比與多空口數
-# ==========================================
 def fetch_retail(product="MTX", label="小台"):
   print(f"抓取{label}散戶多空比 -> [FinMind {product}]")
   inst_long, inst_short = {}, {}
@@ -202,9 +183,6 @@ def fetch_retail(product="MTX", label="小台"):
   return out
 
 
-# ==========================================
-# 5. 選擇權 Put/Call 未平倉比（期交所官網）
-# ==========================================
 def fetch_pc_ratio():
   print("抓取 Put/Call 未平倉比 -> [期交所]")
   html = requests.get(
@@ -221,9 +199,6 @@ def fetch_pc_ratio():
   raise RuntimeError("期交所 P/C 頁面找不到資料列")
 
 
-# ==========================================
-# 6. 外資台指選擇權淨未平倉
-# ==========================================
 def fetch_foreign_options():
   print("抓取外資選擇權 -> [FinMind TXO]")
   rows = [
@@ -245,29 +220,15 @@ def fetch_foreign_options():
   return last, net["買權"], net["賣權"]
 
 
-# ==========================================
-# 6.5 美股 VIX（轉為與台股相同圖表結構）與台股 VIX 情緒分
-# ==========================================
-def vix_to_sentiment(vix_val, low_vix=12.0, high_vix=40.0):
-  """VIX 轉 0~100 情緒分：VIX 越低分越高（偏平靜），VIX 越高分越低（越恐慌）。"""
+def vix_to_gauge_score(vix_val, low_vix=12.0, high_vix=40.0):
+  """把美股 VIX 轉成與半圓情緒儀表板一致的 0~100 分數（VIX 越低越平靜/分數越高，越高越恐慌/分數越低）。"""
   score = (high_vix - float(vix_val)) / (high_vix - low_vix) * 100.0
   return round(max(0.0, min(100.0, score)), 1)
 
 
-def classify_vix_light(vix_val):
-  val = float(vix_val)
-  if val >= 30:
-    return "紅燈・高恐慌"
-  if val >= 20:
-    return "黃燈・警戒升溫"
-  if val >= 15:
-    return "藍燈・常態波動"
-  return "綠燈・低波動"
-
-
-def fetch_us_vix_and_chart():
-  """抓取美股 VIX (^VIX) 最新值、燈號、情緒分，以及與台股同格式的近 CHART_DAYS 圖表資料。"""
-  print("抓取美股 VIX 與走勢圖 -> [yfinance ^VIX]")
+def fetch_us_vix_data():
+  """抓取美股 VIX (^VIX) 最新值、半圓儀表板分數（0~100）與可選的 90 日走勢資料。"""
+  print("抓取美股 VIX -> [yfinance ^VIX]")
   hist = yf.Ticker("^VIX").history(period="1y")
   if hist is None or hist.empty:
     raise RuntimeError("yfinance ^VIX 沒有資料")
@@ -281,28 +242,39 @@ def fetch_us_vix_and_chart():
   df["ma20"] = df["Close"].rolling(window=20, min_periods=1).mean()
   df["ma60"] = df["Close"].rolling(window=60, min_periods=1).mean()
 
-  recent = df.tail(CHART_DAYS)
-  iso_dates = recent["date"].tolist()
-  r2 = lambda s: [round(float(x), 2) for x in s.tolist()]
-
   latest = round(float(df["Close"].iloc[-1]), 2)
   prev = round(float(df["Close"].iloc[-2]), 2) if len(df) >= 2 else latest
   change = round(latest - prev, 2)
   change_pct = round((change / prev) * 100.0, 2) if prev else 0.0
-  trade_date = iso_dates[-1]
-  sentiment_score = vix_to_sentiment(latest)
-  light = classify_vix_light(latest)
+  trade_date = str(df["date"].iloc[-1])
+  gauge_score = vix_to_gauge_score(latest)
+  gauge_label = (
+      "極度恐懼"
+      if gauge_score < 25
+      else (
+          "恐懼"
+          if gauge_score < 45
+          else (
+              "中性"
+              if gauge_score < 55
+              else "貪婪" if gauge_score < 75 else "極度貪婪"
+          )
+      )
+  )
 
-  info = {
+  recent = df.tail(CHART_DAYS)
+  iso_dates = recent["date"].tolist()
+  r2 = lambda s: [round(float(x), 2) for x in s.tolist()]
+
+  vix_info = {
       "date": trade_date,
       "price": latest,
       "change": change,
       "changePercent": change_pct,
-      "light": light,
-      "sentimentScore": sentiment_score,
+      "score": gauge_score,
+      "status": gauge_label,
   }
-  # 與台股圖表結構對齊（dates, open, high, low, close, prices, ma20, ma60）
-  chart = {
+  vix_90d_chart = {
       "dates": [
           datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
           for d in iso_dates
@@ -315,29 +287,9 @@ def fetch_us_vix_and_chart():
       "ma20": r2(recent["ma20"]),
       "ma60": r2(recent["ma60"]),
   }
-  return info, chart
+  return vix_info, vix_90d_chart
 
 
-def fetch_tw_vix_score(tw_vix_value=None):
-  """取得台股 VIX 情緒分數（0~100）。
-    目前手邊無固定來源時安全回傳 None，避免影響主流程與情緒分數計算；
-    未來若有台股 VIX 數值，傳入 tw_vix_value（float）即可直接啟用。"""
-  if tw_vix_value is None:
-    return None
-  try:
-    val = float(tw_vix_value)
-    return {
-        "value": round(val, 2),
-        "light": classify_vix_light(val),
-        "sentimentScore": vix_to_sentiment(val),
-    }
-  except (TypeError, ValueError):
-    return None
-
-
-# ==========================================
-# 7. 台股情緒指數（0~100，子分數平均）
-# ==========================================
 def percentile_rank(values, today):
   return sum(1 for v in values if v <= today) / len(values) * 100
 
@@ -407,12 +359,8 @@ def fetch_institutional_flow():
 
 
 def compute_sentiment(data_date, taiex_closes, foreign_series):
-  """子分數：漲跌家數、大盤RSI、三大法人、外資期貨、美股VIX、台股VIX（若有）。
-    回傳 (分數, 標籤, 子分數 dict, 說明, 子分數明細, 美股VIX資料, 美股VIX圖表, 台股VIX資料)。"""
   scores, notes, details = {}, [], {}
-  us_vix_info, us_vix_chart = None, None
-  tw_vix_info = None
-
+  us_vix_info, us_vix_90d = None, None
   try:
     adv, dec, src = fetch_breadth(data_date)
     scores["漲跌家數"] = adv / (adv + dec) * 100
@@ -420,13 +368,11 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
     details["漲跌家數"] = f"漲 {adv}／跌 {dec}（{src}）"
   except Exception as e:
     print(f"  漲跌家數失敗: {e}")
-
   try:
     scores["大盤RSI"] = rsi(taiex_closes)
     details["大盤RSI"] = "加權指數 RSI(6)"
   except Exception as e:
     print(f"  RSI 失敗: {e}")
-
   try:
     flow = fetch_institutional_flow()
     scores["三大法人"] = percentile_rank(
@@ -436,34 +382,23 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
     details["三大法人"] = f"買賣超 {flow[-1][1] / 1e8:+,.0f} 億・一年排名"
   except Exception as e:
     print(f"  三大法人失敗: {e}")
-
   if foreign_series:
     scores["外資期貨"] = percentile_rank(
         foreign_series[-RANK_WINDOW:], foreign_series[-1]
     )
     details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
-
   try:
-    us_vix_info, us_vix_chart = fetch_us_vix_and_chart()
-    scores["美股VIX"] = us_vix_info["sentimentScore"]
+    us_vix_info, us_vix_90d = fetch_us_vix_data()
+    scores["美股VIX"] = us_vix_info["score"]
     notes.append(f"美VIX {us_vix_info['price']}（{us_vix_info['date']}）")
     details["美股VIX"] = (
-        f"VIX {us_vix_info['price']}（{us_vix_info['light']}・{us_vix_info['date']}）"
+        f"VIX {us_vix_info['price']}（{us_vix_info['status']}・{us_vix_info['date']}）"
     )
   except Exception as e:
     print(f"  美股 VIX 失敗: {e}")
 
-  tw_vix_info = fetch_tw_vix_score()
-  if tw_vix_info and tw_vix_info.get("sentimentScore") is not None:
-    scores["台股VIX"] = tw_vix_info["sentimentScore"]
-    notes.append(f"台VIX {tw_vix_info['value']}")
-    details["台股VIX"] = (
-        f"台股 VIX {tw_vix_info['value']}（{tw_vix_info['light']}）"
-    )
-
   if not scores:
-    return None, "未計算", {}, "", [], us_vix_info, us_vix_chart, tw_vix_info
-
+    return None, "未計算", {}, "", [], us_vix_info, us_vix_90d
   composite = round(sum(scores.values()) / len(scores), 1)
   label = (
       "極度恐懼"
@@ -486,14 +421,10 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
       f"{detail}（{'；'.join(notes)}）" if notes else detail,
       items,
       us_vix_info,
-      us_vix_chart,
-      tw_vix_info,
+      us_vix_90d,
   )
 
 
-# ==========================================
-# 8. 主程序執行
-# ==========================================
 def main():
   now_str = now_tw().strftime("%Y-%m-%d %H:%M")
 
@@ -549,17 +480,11 @@ def main():
       sentiment_detail,
       sentiment_items,
       us_vix_info,
-      us_vix_chart,
-      tw_vix_info,
+      us_vix_90d,
   ) = compute_sentiment(data_date, taiex_res["chart"]["close"], foreign_series)
 
-  vix_source_parts = []
-  if us_vix_info:
-    vix_source_parts.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
-  if tw_vix_info:
-    vix_source_parts.append(f"台股 VIX（{tw_vix_info['value']}）")
   vix_source_text = (
-      ("、" + "、".join(vix_source_parts)) if vix_source_parts else ""
+      f"、美股 VIX yfinance（{us_vix_info['date']}）" if us_vix_info else ""
   )
 
   final_data = {
@@ -570,7 +495,6 @@ def main():
       "sentimentStatus": sentiment_label,
       "sentimentScores": sentiment_items,
       "usVix": us_vix_info,
-      "twVix": tw_vix_info,
       "foreignFutures": int(foreign_net),
       "foreignChange": int(foreign_change),
       "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
@@ -600,7 +524,7 @@ def main():
       },
       "taiexChart": taiex_res["chart"],
       "otcChart": otc_res["chart"],
-      "usVixChart": us_vix_chart,
+      "usVixChart": us_vix_90d,
       "retailChart": {
           "dates": [
               datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
