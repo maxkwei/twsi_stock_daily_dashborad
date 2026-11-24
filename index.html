@@ -1,117 +1,576 @@
-<!-- 1. 美股 VIX 卡片與走勢圖區塊 -->
-<div class="card">
-  <h3>美股 VIX 波動率指數 (90日)</h3>
-  <div id="usVixSummary">載入中...</div>
-  <div style="margin: 8px 0; font-size: 14px;">
-    <span>美股 VIX 情緒分：<strong id="usVixSentimentScore">--</strong></span>
-    <span style="margin-left: 16px;">台股 VIX 情緒分：<strong id="twVixSentimentScore">--</strong></span>
-  </div>
-  <div style="height: 260px; position: relative;">
-    <canvas id="usVixChartCanvas"></canvas>
-  </div>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台股籌碼與期貨日報看板</title>
+
+    <!-- Chart.js 核心與金融圖表外掛 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        :root {
+            --num-size: 26px; /* 2026-10-06：所有主要數字統一大小 */
+            --bg-color: #f4f5f7;
+            --card-bg: #ffffff;
+            --text-main: #172b4d;
+            --text-sub: #5e6c84;
+            --green-color: #00875a; /* 綠色 / 空方 / 下跌 */
+            --red-color: #de350b;   /* 紅色 / 多方 / 上漲 */
+            --ma20-color: #f5a623;  /* 20MA 橘黃 */
+            --ma60-color: #8b572a;  /* 60MA 紫棕 */
+            --border-radius: 16px;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            --accent-color: #0052cc;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            padding: 24px 12px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+
+        .dashboard-container {
+            width: 100%;
+            max-width: 540px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* 頂部標題區 */
+        .header-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-sub);
+        }
+
+        .header-title {
+            font-size: 24px;
+            font-weight: 800;
+            color: #091e42;
+            letter-spacing: -0.5px;
+        }
+
+        /* 恐懼與貪婪情緒卡片 */
+        .sentiment-card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 20px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            border-top: 5px solid #dfe1e6;
+        }
+
+        .sentiment-label {
+            font-size: 13px;
+            color: var(--text-sub);
+        }
+
+        .sentiment-value {
+            font-size: var(--num-size);
+            font-weight: 800;
+            line-height: 1;
+        }
+
+        .sentiment-badge {
+            background-color: #f4f5f7;
+            border: 1px solid #dfe1e6;
+            color: #42526e;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        /* 半圓指針儀表（2026-10-05） */
+        .sentiment-gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+        .sentiment-gauge-wrap svg { width: 100%; max-width: 213px; height: auto; }
+        .sentiment-readout { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-top: -6px; flex-wrap: wrap; }
+        .sentiment-readout .sentiment-value { font-size: var(--num-size); }
+        .sentiment-sub-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+        @media (max-width: 560px) { .sentiment-sub-grid { grid-template-columns: repeat(2, 1fr); } }
+        .sentiment-sub { background: #f8f9fb; border-radius: 8px; padding: 8px 10px; }
+        .sentiment-sub .ss-name { font-size: 12px; color: var(--text-sub); }
+        .sentiment-sub .ss-score { font-size: var(--num-size); font-weight: 800; line-height: 1.3; }
+        .sentiment-sub .ss-bar { height: 4px; border-radius: 2px; background: #e9ebf0; overflow: hidden; margin: 2px 0 4px; }
+        .sentiment-sub .ss-bar > div { height: 100%; }
+        .sentiment-sub .ss-detail { font-size: 11px; color: var(--text-sub); }
+
+        /* 卡片通用設定 */
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 18px 20px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card-title {
+            font-size: 13px;
+            color: var(--text-sub);
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .card-value {
+            font-size: var(--num-size);
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            line-height: 1.2;
+        }
+
+        .card-value.green { color: var(--green-color); }
+        .card-value.red { color: var(--red-color); }
+
+        .card-subtext {
+            font-size: 12px;
+            color: var(--text-sub);
+            margin-top: 6px;
+            font-weight: 500;
+        }
+
+        /* 圖表專用 Header 樣式 */
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 12px;
+        }
+
+        .chart-info-box {
+            text-align: right;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 12px;
+            font-size: 11px;
+            color: var(--text-sub);
+            margin-bottom: 8px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .legend-color-dot {
+            width: 10px;
+            height: 3px;
+            border-radius: 2px;
+        }
+
+        /* 格線系統 */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+        }
+
+        /* 交叉判讀 */
+        .summary-box {
+            background: #ffffff;
+            border-radius: var(--border-radius);
+            padding: 16px 20px;
+            box-shadow: var(--shadow);
+            font-size: 13px;
+            line-height: 1.6;
+            color: #344563;
+        }
+
+        /* 指南教學區塊 */
+        .guide-section {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 20px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .guide-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #091e42;
+            border-bottom: 2px solid #ebecf0;
+            padding-bottom: 8px;
+        }
+
+        .guide-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .guide-item-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--accent-color);
+        }
+
+        .guide-item-desc {
+            font-size: 12px;
+            color: #42526e;
+            line-height: 1.6;
+        }
+
+        .guide-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .guide-table th, .guide-table td {
+            border: 1px solid #dfe1e6;
+            padding: 6px 10px;
+            text-align: left;
+        }
+
+        .guide-table th {
+            background-color: #f4f5f7;
+            font-weight: 700;
+        }
+
+        /* 頁尾 */
+        .footer-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #8993a4;
+            padding: 4px 8px;
+        }
+
+        @media (max-width: 480px) {
+            .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="dashboard-container">
+
+    <!-- 頂部標題區 -->
+    <div class="header-section">
+        <div class="header-top">
+            <span>台股籌碼日報 • 外資動向</span>
+            <span id="data-date">資料日期 ------</span>
+        </div>
+        <h1 class="header-title">期貨怎麼說？</h1>
+    </div>
+
+    <!-- 1. 恐懼與貪婪情緒卡片 -->
+    <div class="sentiment-card" id="sentiment-card">
+        <div class="sentiment-label">台股情緒指數</div>
+        <div class="sentiment-gauge-wrap">
+            <svg viewBox="0 0 240 140" role="img" aria-label="台股情緒指數半圓儀表">
+                <g id="gauge-bands" fill="none" stroke-width="20"></g>
+                <g font-size="10" fill="#6b778c" text-anchor="middle">
+                    <text x="22" y="134">0</text>
+                    <text x="120" y="12">50</text>
+                    <text x="218" y="134">100</text>
+                </g>
+                <line id="gauge-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
+                <circle cx="120" cy="120" r="8" fill="#091e42"/>
+            </svg>
+            <div class="sentiment-readout">
+                <span class="sentiment-value" id="sentiment-val">--.-</span>
+                <span style="font-size: 12px; color: var(--text-sub);">/100</span>
+                <span class="sentiment-badge" id="sentiment-status">載入中...</span>
+            </div>
+        </div>
+        <div class="sentiment-sub-grid" id="sentiment-subs"></div>
+    </div>
+
+    <!-- 1.5 美股 VIX 半圓儀表卡片（與台股情緒半圓同款） -->
+    <div class="sentiment-card" id="us-vix-gauge-card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="sentiment-label">美股 VIX 情緒半圓（恐慌反向映射）</span>
+            <span id="us-vix-date-badge" style="font-size:11px; color:var(--text-sub);">美股日期 ----</span>
+        </div>
+        <div class="sentiment-gauge-wrap">
+            <svg viewBox="0 0 240 140" role="img" aria-label="美股 VIX 情緒半圓儀表">
+                <g id="vix-gauge-bands" fill="none" stroke-width="20"></g>
+                <g font-size="10" fill="#6b778c" text-anchor="middle">
+                    <text x="22" y="134">0</text>
+                    <text x="120" y="12">50</text>
+                    <text x="218" y="134">100</text>
+                </g>
+                <line id="vix-gauge-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
+                <circle cx="120" cy="120" r="8" fill="#091e42"/>
+            </svg>
+            <div class="sentiment-readout">
+                <span class="sentiment-value" id="vix-gauge-val">--.-</span>
+                <span style="font-size: 12px; color: var(--text-sub);">/100</span>
+                <span class="sentiment-badge" id="vix-gauge-status">載入中...</span>
+            </div>
+        </div>
+        <div class="card-subtext" id="vix-gauge-meta" style="text-align:center;">VIX 指數 --.--（--）</div>
+    </div>
+
+    <!-- 2. 外資台指期淨未平倉 -->
+    <div class="card">
+        <div class="card-title">外資台指期淨未平倉</div>
+        <div class="card-value green" id="foreign-futures">--- 口</div>
+        <div class="card-subtext" id="foreign-change">較昨日 -- 口 | ----</div>
+    </div>
+
+    <!-- 3. 散戶多空比：小台／微台 -->
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-title">散戶小台多空比</div>
+            <div class="card-value red" id="retail-small">--%</div>
+            <div class="card-subtext">≥20% 過熱（反指標）</div>
+        </div>
+        <div class="card">
+            <div class="card-title">散戶微台多空比</div>
+            <div class="card-value red" id="retail-micro">--%</div>
+            <div class="card-subtext">≥20% 過熱（反指標）</div>
+        </div>
+    </div>
+
+    <!-- 4. 選擇權：Put/Call 未平倉比／外資選擇權 -->
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-title">Put/Call 未平倉比</div>
+            <div class="card-value" id="pc-ratio">--%</div>
+            <div class="card-subtext">>100% 偏多防護</div>
+        </div>
+        <div class="card">
+            <div class="card-title">外資選擇權 (Call / Put 淨OI)</div>
+            <div class="card-value" id="foreign-options">-- / --</div>
+            <div class="card-subtext">口數；正值 = 偏買方</div>
+        </div>
+    </div>
+
+    <!-- 5. 交叉判讀 -->
+    <div class="summary-box">
+        <strong>交叉判讀：</strong><span id="analysis-text">正在讀取數據分析中...</span>
+    </div>
+
+    <!-- 📈 圖表 1：台灣加權指數 90日走勢圖 & 成交量 -->
+    <div class="card">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">台灣加權指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
+                <div class="chart-legend" style="margin-top: 4px;">
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
+                </div>
+            </div>
+            <div class="chart-info-box">
+                <div id="taiex-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">--,---.--</div>
+                <div id="taiex-change" style="color: var(--red-color); font-size: 12px;">+0.00 (+0.00%)</div>
+            </div>
+        </div>
+        <canvas id="taiexChart" height="200"></canvas>
+    </div>
+
+    <!-- 📈 圖表 2：櫃買指數 90日走勢圖 & 成交量 -->
+    <div class="card">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">櫃買指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
+                <div class="chart-legend" style="margin-top: 4px;">
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
+                </div>
+            </div>
+            <div class="chart-info-box">
+                <div id="otc-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">---.--</div>
+                <div id="otc-change" style="color: var(--red-color); font-size: 12px;">+0.00 (+0.00%)</div>
+            </div>
+        </div>
+        <canvas id="otcChart" height="200"></canvas>
+    </div>
+
+    <!-- 📈 圖表 3：小台散戶多空比與加權指數走勢圖 -->
+    <div class="card">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">小台散戶多空比歷史趨勢圖</div>
+                <div style="font-size: 12px; color: #888; margin-top: 2px;">
+                    散戶多單: <span id="retail-long-val" style="color: #de350b; font-weight: bold;">--</span> |
+                    散戶空單: <span id="retail-short-val" style="color: #00875a; font-weight: bold;">--</span>
+                </div>
+            </div>
+            <div class="card-value red" id="retail-small-chart-val">+0.00%</div>
+        </div>
+        <canvas id="retailOverlayChart" height="180"></canvas>
+    </div>
+
+    <!-- 📈 可選圖表：美股 VIX 波動率指數 (90日) 放在下方 -->
+    <div class="card" id="us-vix-90d-card" style="display: none;">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">美股 VIX 波動率指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
+                <div class="chart-legend" style="margin-top: 4px;">
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
+                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
+                </div>
+            </div>
+            <div class="chart-info-box">
+                <div id="us-vix-90d-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">--.--</div>
+                <div id="us-vix-90d-change" style="font-size: 12px;">+0.00 (+0.00%)</div>
+            </div>
+        </div>
+        <canvas id="usVix90dChart" height="170"></canvas>
+    </div>
+
+    <!-- 📚 籌碼分析指南與教學 -->
+    <div class="guide-section">
+        <div class="guide-title">
+            <span>📖</span> 籌碼資料來源與指標判讀指南
+        </div>
+
+        <div class="guide-item">
+            <div class="guide-item-title">1. 資料來源與自動抓取方式</div>
+            <div class="guide-item-desc">
+                本看板每日數據均來自<strong>台灣期貨交易所 (TAIFEX)</strong> 與 <strong>台灣證券交易所 (TWSE)</strong> 官方公開資料。系統於<strong>每日下午 18:05</strong> 自動啟動 Python 爬蟲更新數據並刷新圖表。
+            </div>
+        </div>
+
+        <div class="guide-item">
+            <div class="guide-item-title">2. 各項指標意義與計算方式</div>
+            <div class="guide-item-desc">
+                <ul>
+                    <li><strong>外資台指期淨未平倉：</strong>外資期貨多空未平倉單差額，負值代表空單較多（避險需求高）。</li>
+                    <li><strong>散戶多空比 (小台/微台)：</strong><code>-(三大法人淨未平倉量 / 全市場未平倉總量) * 100%</code>。散戶常為反指標，數值 ≥ 20% 代表過熱偏多。</li>
+                    <li><strong>Put/Call 未平倉比：</strong><code>Sell Put 未平倉量 / Sell Call 未平倉量</code>。> 100% 代表下檔支撐力道強。</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="guide-item">
+            <div class="guide-item-title">3. 大盤市場多空方向判讀法則</div>
+            <table class="guide-table">
+                <thead>
+                    <tr>
+                        <th>市場格局</th>
+                        <th>指標特徵</th>
+                        <th>建議策略</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="color: #de350b; font-weight: bold;">強勢多頭</td>
+                        <td>散戶多空比 &lt; 0%、P/C Ratio &gt; 110%、大盤站穩 20MA/60MA 上</td>
+                        <td>順勢偏多操作，拉回找買點。</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #ffab00; font-weight: bold;">現貨熱、期貨避險</td>
+                        <td>外資期貨空單 &gt; 3萬口、散戶多空比 ≥ 20%（過熱背離）</td>
+                        <td>警惕背離風險，不宜追高。</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #00875a; font-weight: bold;">弱勢空頭</td>
+                        <td>散戶多空比 &gt; +20%、P/C Ratio &lt; 90%、指數破 60MA 季線</td>
+                        <td>保守觀望或適度進行避險。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 頁尾 -->
+    <div class="footer-info">
+        <span id="update-time">報表產出 ------</span>
+    </div>
+
 </div>
 
-<!-- 2. Chart.js（若頁面已引入可省略這行） -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <script>
-  let usVixChartInstance = null;
-
-  function renderMarketLineChart(canvasId, chartInstanceRef, chartData, seriesLabel) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx || !chartData || !Array.isArray(chartData.dates)) return null;
-
-    if (chartInstanceRef) {
-      chartInstanceRef.destroy();
+    function renderRetailOverlayChart(data) {
+        const ctx = document.getElementById('retailOverlayChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.dates,
+                datasets: [
+                    {
+                        type: 'line',
+                        label: '加權指數',
+                        data: data.indexValues,
+                        borderColor: '#1a1a1a',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        yAxisID: 'yIndex',
+                        tension: 0.1
+                    },
+                    {
+                        type: 'bar',
+                        label: '散戶多空比 (%)',
+                        data: data.retailRatios,
+                        backgroundColor: data.retailRatios.map(v => v >= 0 ? '#de350b' : '#00875a'),
+                        yAxisID: 'yRatio',
+                        barPercentage: 0.6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+                    yRatio: {
+                        type: 'linear',
+                        position: 'left',
+                        ticks: { callback: v => v + '%' },
+                        grid: { color: '#f0f0f0' }
+                    },
+                    yIndex: {
+                        type: 'linear',
+                        position: 'right',
+                        beginAtZero: false,
+                        grid: { display: false },
+                        ticks: { callback: v => v.toLocaleString() }
+                    }
+                }
+            }
+        });
     }
 
-    return new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: chartData.dates,
-        datasets: [
-          {
-            label: seriesLabel,
-            data: chartData.close,
-            borderColor: "#2563eb",
-            backgroundColor: "rgba(37, 99, 235, 0.08)",
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.15,
-          },
-          {
-            label: "20MA",
-            data: chartData.ma20,
-            borderColor: "#f59e0b",
-            borderWidth: 1.5,
-            pointRadius: 0,
-            borderDash: [4, 2],
-          },
-          {
-            label: "60MA",
-            data: chartData.ma60,
-            borderColor: "#10b981",
-            borderWidth: 1.5,
-            pointRadius: 0,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { display: true, position: "top" },
-        },
-      },
-    });
-  }
-
-  function renderVixAndSentiment(data) {
-    if (data.usVix) {
-      const sign = data.usVix.change >= 0 ? "+" : "";
-      const summaryEl = document.getElementById("usVixSummary");
-      if (summaryEl) {
-        summaryEl.textContent =
-          `${data.usVix.price} (${sign}${data.usVix.change} / ${sign}${data.usVix.changePercent}%)` +
-          ` ・ ${data.usVix.light} ・ 美股日期 ${data.usVix.date}`;
-      }
-    }
-
-    if (data.usVixChart) {
-      usVixChartInstance = renderMarketLineChart(
-        "usVixChartCanvas",
-        usVixChartInstance,
-        data.usVixChart,
-        "美股 VIX (^VIX)"
-      );
-    }
-
-    const scores = Array.isArray(data.sentimentScores) ? data.sentimentScores : [];
-    const usItem = scores.find((item) => item.name === "美股VIX");
-    const twItem = scores.find((item) => item.name === "台股VIX");
-
-    const usScoreEl = document.getElementById("usVixSentimentScore");
-    if (usScoreEl) {
-      usScoreEl.textContent = usItem ? `${usItem.score} / 100` : "暫無資料";
-    }
-
-    const twScoreEl = document.getElementById("twVixSentimentScore");
-    if (twScoreEl) {
-      twScoreEl.textContent = twItem ? `${twItem.score} / 100` : "待補台股 VIX 來源";
-    }
-  }
-
-  // 在你原本讀取 data.json 的地方呼叫 renderVixAndSentiment(data)
-  async function loadDashboardVix() {
-    try {
-      const res = await fetch(`./data.json?t=${Date.now()}`);
-      const data = await res.json();
-      renderVixAndSentiment(data);
-    } catch (err) {
-      console.error("讀取 data.json 失敗:", err);
-    }
-  }
-
-  document.addEventListener("DOMContentLoaded", loadDashboardVix);
-</script>
+    function renderIndexChart(canvasId, chartData) {
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        const UP = '#de350b', DOWN = '#1a1a1a';
+        const n = chartData.dates.length;
+        const isUp = i => chartData.close[i] >= chartData.open[i];
+        const candleColors = [...Array(n).keys()].map(i => isUp(i) ? UP : DOWN);
+        const wicks = [...Array(
