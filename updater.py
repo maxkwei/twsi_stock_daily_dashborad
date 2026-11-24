@@ -355,6 +355,6 @@ def main():
     if not taiex_res:
         errors.append("加權指數")
     if not otc_res:
-        errors.append("櫃
+        errors.append("櫃買指數")
 
 
