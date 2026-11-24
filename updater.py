@@ -318,49 +318,21 @@ def fetch_us_vix_and_chart():
   return info, chart
 
 
-def fetch_tw_vix():
-  """嘗試抓取台股 VIX（臺指波動率指數）；若來源暫無資料則安全回傳 None。"""
-  print("嘗試抓取台股 VIX...")
-  candidate_datasets = [
-      ("TaiwanOptionVIX", ""),
-      ("TaiwanStockVIX", ""),
-  ]
-  for dataset, data_id in candidate_datasets:
-    try:
-      rows = finmind(dataset, data_id, days=30)
-      if rows:
-        df = pd.DataFrame(rows)
-        val_col = next(
-            (c for c in ("Close", "close", "vix", "VIX", "value") if c in df.columns),
-            None,
-        )
-        date_col = next(
-            (c for c in ("date", "Date") if c in df.columns),
-            None,
-        )
-        if val_col and date_col:
-          df = df.dropna(subset=[val_col]).sort_values(date_col)
-          if not df.empty:
-            latest = round(float(df[val_col].iloc[-1]), 2)
-            prev = (
-                round(float(df[val_col].iloc[-2]), 2)
-                if len(df) >= 2
-                else latest
-            )
-            change = round(latest - prev, 2)
-            trade_date = str(df[date_col].iloc[-1])[:10]
-            return {
-                "date": trade_date,
-                "price": latest,
-                "change": change,
-                "light": classify_vix_light(latest),
-                "sentimentScore": vix_to_sentiment(latest),
-            }
-    except Exception:
-      continue
-
-  print("  台股 VIX 公開/FinMind 欄位未命中，暫略過台股VIX子分數")
-  return None
+def fetch_tw_vix_score(tw_vix_value=None):
+  """取得台股 VIX 情緒分數（0~100）。
+    目前手邊無固定來源時安全回傳 None，避免影響主流程與情緒分數計算；
+    未來若有台股 VIX 數值，傳入 tw_vix_value（float）即可直接啟用。"""
+  if tw_vix_value is None:
+    return None
+  try:
+    val = float(tw_vix_value)
+    return {
+        "value": round(val, 2),
+        "light": classify_vix_light(val),
+        "sentimentScore": vix_to_sentiment(val),
+    }
+  except (TypeError, ValueError):
+    return None
 
 
 # ==========================================
@@ -481,12 +453,12 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
   except Exception as e:
     print(f"  美股 VIX 失敗: {e}")
 
-  tw_vix_info = fetch_tw_vix()
+  tw_vix_info = fetch_tw_vix_score()
   if tw_vix_info and tw_vix_info.get("sentimentScore") is not None:
     scores["台股VIX"] = tw_vix_info["sentimentScore"]
-    notes.append(f"台VIX {tw_vix_info['price']}（{tw_vix_info['date']}）")
+    notes.append(f"台VIX {tw_vix_info['value']}")
     details["台股VIX"] = (
-        f"VIX {tw_vix_info['price']}（{tw_vix_info['light']}・{tw_vix_info['date']}）"
+        f"台股 VIX {tw_vix_info['value']}（{tw_vix_info['light']}）"
     )
 
   if not scores:
@@ -585,8 +557,10 @@ def main():
   if us_vix_info:
     vix_source_parts.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
   if tw_vix_info:
-    vix_source_parts.append(f"台股 VIX FinMind（{tw_vix_info['date']}）")
-  vix_source_text = ("、" + "、".join(vix_source_parts)) if vix_source_parts else ""
+    vix_source_parts.append(f"台股 VIX（{tw_vix_info['value']}）")
+  vix_source_text = (
+      ("、" + "、".join(vix_source_parts)) if vix_source_parts else ""
+  )
 
   final_data = {
       "date": data_date,
