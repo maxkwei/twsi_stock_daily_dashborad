@@ -10,15 +10,15 @@
 
     <style>
         :root {
-            --num-size: 26px; /* 2026-10-06：所有主要數字統一大小 */
+            --num-size: 26px;
             --bg-color: #f4f5f7;
             --card-bg: #ffffff;
             --text-main: #172b4d;
             --text-sub: #5e6c84;
-            --green-color: #00875a; /* 綠色 / 空方 / 下跌 */
-            --red-color: #de350b;   /* 紅色 / 多方 / 上漲 */
-            --ma20-color: #f5a623;  /* 20MA 橘黃 */
-            --ma60-color: #8b572a;  /* 60MA 紫棕 */
+            --green-color: #00875a;
+            --red-color: #de350b;
+            --ma20-color: #f5a623;
+            --ma60-color: #8b572a;
             --border-radius: 16px;
             --shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
             --accent-color: #0052cc;
@@ -49,7 +49,6 @@
             gap: 16px;
         }
 
-        /* 頂部標題區 */
         .header-section {
             display: flex;
             flex-direction: column;
@@ -72,7 +71,6 @@
             letter-spacing: -0.5px;
         }
 
-        /* 恐懼與貪婪情緒卡片 */
         .sentiment-card {
             background: var(--card-bg);
             border-radius: var(--border-radius);
@@ -82,6 +80,20 @@
             flex-direction: column;
             gap: 12px;
             border-top: 5px solid #dfe1e6;
+        }
+
+        .vix-pair-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        @media (max-width: 520px) {
+            .vix-pair-grid { grid-template-columns: 1fr; }
+        }
+
+        .vix-mini-card {
+            padding: 16px;
+            gap: 8px;
         }
 
         .sentiment-label {
@@ -99,16 +111,16 @@
             background-color: #f4f5f7;
             border: 1px solid #dfe1e6;
             color: #42526e;
-            padding: 6px 14px;
+            padding: 5px 12px;
             border-radius: 20px;
             font-weight: 700;
-            font-size: 13px;
+            font-size: 12px;
         }
 
-        /* 半圓指針儀表（2026-10-05） */
         .sentiment-gauge-wrap { display: flex; flex-direction: column; align-items: center; }
         .sentiment-gauge-wrap svg { width: 100%; max-width: 213px; height: auto; }
-        .sentiment-readout { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-top: -6px; flex-wrap: wrap; }
+        .vix-mini-card .sentiment-gauge-wrap svg { max-width: 175px; }
+        .sentiment-readout { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin-top: -6px; flex-wrap: wrap; }
         .sentiment-readout .sentiment-value { font-size: var(--num-size); }
         .sentiment-sub-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
         @media (max-width: 560px) { .sentiment-sub-grid { grid-template-columns: repeat(2, 1fr); } }
@@ -119,7 +131,6 @@
         .sentiment-sub .ss-bar > div { height: 100%; }
         .sentiment-sub .ss-detail { font-size: 11px; color: var(--text-sub); }
 
-        /* 卡片通用設定 */
         .card {
             background: var(--card-bg);
             border-radius: var(--border-radius);
@@ -153,7 +164,6 @@
             font-weight: 500;
         }
 
-        /* 圖表專用 Header 樣式 */
         .chart-header {
             display: flex;
             justify-content: space-between;
@@ -187,20 +197,12 @@
             border-radius: 2px;
         }
 
-        /* 格線系統 */
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
         }
 
-        .grid-3 {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 10px;
-        }
-
-        /* 交叉判讀 */
         .summary-box {
             background: #ffffff;
             border-radius: var(--border-radius);
@@ -211,7 +213,6 @@
             color: #344563;
         }
 
-        /* 指南教學區塊 */
         .guide-section {
             background: var(--card-bg);
             border-radius: var(--border-radius);
@@ -266,19 +267,12 @@
             font-weight: 700;
         }
 
-        /* 頁尾 */
         .footer-info {
             display: flex;
             justify-content: space-between;
             font-size: 12px;
             color: #8993a4;
             padding: 4px 8px;
-        }
-
-        @media (max-width: 480px) {
-            .grid-3 {
-                grid-template-columns: 1fr;
-            }
         }
     </style>
 </head>
@@ -295,7 +289,7 @@
         <h1 class="header-title">期貨怎麼說？</h1>
     </div>
 
-    <!-- 1. 恐懼與貪婪情緒卡片 -->
+    <!-- 1. 台股情緒指數半圓卡片 -->
     <div class="sentiment-card" id="sentiment-card">
         <div class="sentiment-label">台股情緒指數</div>
         <div class="sentiment-gauge-wrap">
@@ -318,48 +312,72 @@
         <div class="sentiment-sub-grid" id="sentiment-subs"></div>
     </div>
 
-    <!-- 1.5 美股 VIX 情緒半圓（恐慌反向映射） -->
-    <div class="sentiment-card" id="us-vix-gauge-card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span class="sentiment-label">美股 VIX 情緒半圓（恐慌反向映射）</span>
-            <span id="us-vix-date-badge" style="font-size:11px; color:var(--text-sub);">美股日期 ----</span>
-        </div>
-        <div class="sentiment-gauge-wrap">
-            <svg viewBox="0 0 240 140" role="img" aria-label="美股 VIX 情緒半圓儀表">
-                <g id="vix-gauge-bands" fill="none" stroke-width="20"></g>
-                <g font-size="10" fill="#6b778c" text-anchor="middle">
-                    <text x="22" y="134">0</text>
-                    <text x="120" y="12">50</text>
-                    <text x="218" y="134">100</text>
-                </g>
-                <line id="vix-gauge-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
-                <circle cx="120" cy="120" r="8" fill="#091e42"/>
-            </svg>
-            <div class="sentiment-readout">
-                <span class="sentiment-value" id="vix-gauge-val">--.-</span>
-                <span style="font-size: 12px; color: var(--text-sub);">/100</span>
-                <span class="sentiment-badge" id="vix-gauge-status">載入中...</span>
+    <!-- 1.5 美股 VIX & 台股 VIX 情緒半圓並列 -->
+    <div class="vix-pair-grid">
+        <div class="sentiment-card vix-mini-card" id="us-vix-gauge-card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span class="sentiment-label">美股 VIX 情緒半圓</span>
+                <span id="us-vix-date-badge" style="font-size:11px; color:var(--text-sub);">----</span>
             </div>
-        </div>
-        <div class="card-subtext" id="vix-gauge-meta" style="text-align:center;">VIX 指數 --.--（--）</div>
-    </div>
-
-    <!-- 1.6 美股 VIX 波動率指數 (90日) 緊接在美股 VIX 情緒半圓下方 -->
-    <div class="card" id="us-vix-90d-card" style="display: none;">
-        <div class="chart-header">
-            <div>
-                <div class="card-title" style="margin: 0;">美股 VIX 波動率指數 <span style="font-size: 11px; color: var(--text-sub);">90日</span></div>
-                <div class="chart-legend" style="margin-top: 4px;">
-                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma20-color);"></div> 20MA</div>
-                    <div class="legend-item"><div class="legend-color-dot" style="background: var(--ma60-color);"></div> 60MA</div>
+            <div class="sentiment-gauge-wrap">
+                <svg viewBox="0 0 240 140" role="img" aria-label="美股 VIX 情緒半圓儀表">
+                    <g id="vix-us-bands" fill="none" stroke-width="20"></g>
+                    <g font-size="10" fill="#6b778c" text-anchor="middle">
+                        <text x="22" y="134">0</text>
+                        <text x="120" y="12">50</text>
+                        <text x="218" y="134">100</text>
+                    </g>
+                    <line id="vix-us-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
+                    <circle cx="120" cy="120" r="8" fill="#091e42"/>
+                </svg>
+                <div class="sentiment-readout">
+                    <span class="sentiment-value" id="vix-us-val">--.-</span>
+                    <span style="font-size: 11px; color: var(--text-sub);">/100</span>
+                    <span class="sentiment-badge" id="vix-us-status">載入中...</span>
                 </div>
             </div>
-            <div class="chart-info-box">
-                <div id="us-vix-90d-price" style="font-size: var(--num-size); font-weight: 800; color: #091e42;">--.--</div>
-                <div id="us-vix-90d-change" style="font-size: 12px;">+0.00 (+0.00%)</div>
-            </div>
+            <div class="card-subtext" id="vix-us-meta" style="text-align:center;">VIX --.--</div>
         </div>
-        <canvas id="usVix90dChart" height="170"></canvas>
+
+        <div class="sentiment-card vix-mini-card" id="tw-vix-gauge-card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span class="sentiment-label">台股 VIX 情緒半圓</span>
+                <span id="tw-vix-date-badge" style="font-size:11px; color:var(--text-sub);">----</span>
+            </div>
+            <div class="sentiment-gauge-wrap">
+                <svg viewBox="0 0 240 140" role="img" aria-label="台股 VIX 情緒半圓儀表">
+                    <g id="vix-tw-bands" fill="none" stroke-width="20"></g>
+                    <g font-size="10" fill="#6b778c" text-anchor="middle">
+                        <text x="22" y="134">0</text>
+                        <text x="120" y="12">50</text>
+                        <text x="218" y="134">100</text>
+                    </g>
+                    <line id="vix-tw-needle" x1="120" y1="120" x2="120" y2="42" stroke="#091e42" stroke-width="4" stroke-linecap="round" style="transform-origin: 120px 120px; transition: transform 0.6s;"/>
+                    <circle cx="120" cy="120" r="8" fill="#091e42"/>
+                </svg>
+                <div class="sentiment-readout">
+                    <span class="sentiment-value" id="vix-tw-val">--.-</span>
+                    <span style="font-size: 11px; color: var(--text-sub);">/100</span>
+                    <span class="sentiment-badge" id="vix-tw-status">載入中...</span>
+                </div>
+            </div>
+            <div class="card-subtext" id="vix-tw-meta" style="text-align:center;">VIX --.--</div>
+        </div>
+    </div>
+
+    <!-- 1.6 美股 VIX vs. 台股 VIX 對照走勢圖（半圓下方） -->
+    <div class="card" id="vix-compare-card" style="display: none;">
+        <div class="chart-header">
+            <div>
+                <div class="card-title" style="margin: 0;">美股 VIX vs. 台股 VIX 對照走勢 <span style="font-size: 11px; color: var(--text-sub);">近期對照</span></div>
+                <div class="chart-legend" style="margin-top: 4px;">
+                    <div class="legend-item"><div class="legend-color-dot" style="background: #2563eb;"></div> 美股 VIX (^VIX)</div>
+                    <div class="legend-item"><div class="legend-color-dot" style="background: #de350b;"></div> 台股 VIX (TAIFEX)</div>
+                </div>
+            </div>
+            <div class="chart-info-box" id="vix-compare-latest" style="font-size: 12px; color: var(--text-sub);"></div>
+        </div>
+        <canvas id="vixCompareChart" height="175"></canvas>
     </div>
 
     <!-- 2. 外資台指期淨未平倉 -->
@@ -683,37 +701,41 @@
         });
     }
 
-    function renderUsVix90dChart(chartData) {
-        const card = document.getElementById('us-vix-90d-card');
-        if (!chartData || !Array.isArray(chartData.dates) || !chartData.dates.length) return;
+    function renderVixCompareChart(compareData, usVix, twVix) {
+        const card = document.getElementById('vix-compare-card');
+        if (!compareData || !Array.isArray(compareData.dates) || !compareData.dates.length) return;
         card.style.display = 'flex';
-        const ctx = document.getElementById('usVix90dChart').getContext('2d');
+
+        const parts = [];
+        if (usVix && usVix.price != null) parts.push(`美 ${Number(usVix.price).toFixed(2)}`);
+        if (twVix && twVix.price != null) parts.push(`台 ${Number(twVix.price).toFixed(2)}`);
+        document.getElementById('vix-compare-latest').innerText = parts.join(' / ');
+
+        const ctx = document.getElementById('vixCompareChart').getContext('2d');
         new Chart(ctx, {
             type: 'line',
             data: {
-                labels: chartData.dates,
+                labels: compareData.dates,
                 datasets: [
                     {
-                        label: 'VIX 收盤',
-                        data: chartData.close,
+                        label: '美股 VIX (^VIX)',
+                        data: compareData.usClose,
                         borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.08)',
                         borderWidth: 2,
                         pointRadius: 0,
+                        spanGaps: true,
                         tension: 0.15
                     },
                     {
-                        label: '20MA',
-                        data: chartData.ma20,
-                        borderColor: '#f5a623',
-                        borderWidth: 1.5,
-                        pointRadius: 0
-                    },
-                    {
-                        label: '60MA',
-                        data: chartData.ma60,
-                        borderColor: '#8b572a',
-                        borderWidth: 1.5,
-                        pointRadius: 0
+                        label: '台股 VIX (TAIFEX)',
+                        data: compareData.twClose,
+                        borderColor: '#de350b',
+                        backgroundColor: 'rgba(222, 53, 11, 0.08)',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        spanGaps: true,
+                        tension: 0.15
                     }
                 ]
             },
@@ -770,11 +792,32 @@
         }
     }
 
+    function fillVixCard(prefix, cardId, vixObj, labelPrefix) {
+        if (!vixObj) {
+            renderSemiGauge(`vix-${prefix}-bands`, `vix-${prefix}-needle`, `vix-${prefix}-val`, `vix-${prefix}-status`, cardId, null, '無資料');
+            document.getElementById(`${prefix}-vix-date-badge`).innerText = '----';
+            document.getElementById(`vix-${prefix}-meta`).innerText = `${labelPrefix} --.--`;
+            return;
+        }
+        renderSemiGauge(
+            `vix-${prefix}-bands`,
+            `vix-${prefix}-needle`,
+            `vix-${prefix}-val`,
+            `vix-${prefix}-status`,
+            cardId,
+            vixObj.score,
+            vixObj.status || ''
+        );
+        document.getElementById(`${prefix}-vix-date-badge`).innerText = vixObj.date || '----';
+        const sign = Number(vixObj.change) >= 0 ? '+' : '';
+        document.getElementById(`vix-${prefix}-meta`).innerText =
+            `${labelPrefix} ${Number(vixObj.price).toFixed(2)}（${sign}${vixObj.change}）`;
+    }
+
     function renderSentiment(data) {
         renderSemiGauge('gauge-bands', 'gauge-needle', 'sentiment-val', 'sentiment-status', 'sentiment-card', data.sentiment, data.sentimentStatus);
 
-        // 移除重複的美股VIX子卡片，只保留其餘台股情緒子指標
-        const subs = (data.sentimentScores || []).filter(s => s.name !== '美股VIX');
+        const subs = (data.sentimentScores || []).filter(s => s.name !== '美股VIX' && s.name !== '台股VIX');
         document.getElementById('sentiment-subs').innerHTML = subs.map(s => `
             <div class="sentiment-sub">
                 <div class="ss-name">${s.name}</div>
@@ -783,20 +826,8 @@
                 <div class="ss-detail">${s.detail}</div>
             </div>`).join('');
 
-        if (data.usVix) {
-            const vix = data.usVix;
-            const statusText = vix.status || vix.light || '';
-            renderSemiGauge('vix-gauge-bands', 'vix-gauge-needle', 'vix-gauge-val', 'vix-gauge-status', 'us-vix-gauge-card', vix.score, statusText);
-            document.getElementById('us-vix-date-badge').innerText = `美股日期 ${vix.date || '----'}`;
-            const sign = Number(vix.change) >= 0 ? '+' : '';
-            document.getElementById('vix-gauge-meta').innerText =
-                `VIX ${vix.price}（${sign}${vix.change} / ${sign}${vix.changePercent}%）・數值越高越恐慌，半圓刻度越低`;
-
-            document.getElementById('us-vix-90d-price').innerText = Number(vix.price).toFixed(2);
-            const chgEl = document.getElementById('us-vix-90d-change');
-            chgEl.innerText = `${sign}${vix.change} (${sign}${vix.changePercent}%)`;
-            chgEl.style.color = Number(vix.change) >= 0 ? 'var(--red-color)' : 'var(--green-color)';
-        }
+        fillVixCard('us', 'us-vix-gauge-card', data.usVix, '美VIX');
+        fillVixCard('tw', 'tw-vix-gauge-card', data.twVix, '台VIX');
     }
 
     async function loadDashboardData() {
@@ -841,10 +872,10 @@
             document.getElementById('otc-change').innerText = `${data.otc.change >= 0 ? '+' : ''}${data.otc.change} (${data.otc.changePercent}%)`;
             document.getElementById('otc-change').style.color = data.otc.change >= 0 ? 'var(--red-color)' : 'var(--green-color)';
 
+            renderVixCompareChart(data.vixCompareChart, data.usVix, data.twVix);
             renderIndexChart('taiexChart', data.taiexChart);
             renderIndexChart('otcChart', data.otcChart);
             renderRetailOverlayChart(data.retailChart);
-            renderUsVix90dChart(data.usVixChart);
 
         } catch (e) {
             console.error("載入資料失敗:", e);
