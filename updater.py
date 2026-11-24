@@ -386,3 +386,262 @@ def fetch_breadth(day):
   print("抓取漲跌家數 -> [證交所＋櫃買中心]")
   res = requests.get(
       "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+      params={"date": day.replace("-", ""), "type": "MS", "response": "json"},
+      headers=HEADERS,
+      timeout=15,
+  ).json()
+  for t in res.get("tables", []):
+    if "漲跌證券數合計" in t.get("title", ""):
+      col = t["fields"].index("股票")
+      cnt = {
+          row[0][:2]: int(row[col].split("(")[0].replace(",", ""))
+          for row in t["data"]
+      }
+      break
+  else:
+    raise RuntimeError(f"證交所 {day} 沒有漲跌家數表")
+  y, m, d = day.split("-")
+  otc = requests.get(
+      "https://www.tpex.org.tw/web/stock/aftertrading/market_highlight/highlight_result.php",
+      params={"l": "zh-tw", "d": f"{int(y) - 1911}/{m}/{d}", "o": "json"},
+      headers=HEADERS,
+      timeout=15,
+  ).json()
+  tbl = next((t for t in otc.get("tables", []) if t.get("data")), None)
+  if tbl is None:
+    raise RuntimeError(f"櫃買中心 {day} 沒有彙總資訊")
+  row, f = tbl["data"][0], tbl["fields"]
+  o_up = int(row[f.index("上漲家數")].replace(",", ""))
+  o_dn = int(row[f.index("下跌家數")].replace(",", ""))
+  return (
+      cnt["上漲"] + o_up,
+      cnt["下跌"] + o_dn,
+      f"上市 {cnt['上漲']}／{cnt['下跌']}＋上櫃 {o_up}／{o_dn}",
+  )
+
+
+def fetch_institutional_flow():
+  print("抓取三大法人買賣超 -> [FinMind]")
+  rows = [
+      r
+      for r in finmind(
+          "TaiwanStockTotalInstitutionalInvestors",
+          "",
+          days=SENTIMENT_LOOKBACK_DAYS,
+      )
+      if r["name"] == "total"
+  ]
+  return sorted((r["date"], r["buy"] - r["sell"]) for r in rows)
+
+
+def compute_sentiment(data_date, taiex_closes, foreign_series):
+  """子分數：漲跌家數、大盤RSI、三大法人、外資期貨、美股VIX、台股VIX（若有）。
+    回傳 (分數, 標籤, 子分數 dict, 說明, 子分數明細, 美股VIX資料, 美股VIX圖表, 台股VIX資料)。"""
+  scores, notes, details = {}, [], {}
+  us_vix_info, us_vix_chart = None, None
+  tw_vix_info = None
+
+  try:
+    adv, dec, src = fetch_breadth(data_date)
+    scores["漲跌家數"] = adv / (adv + dec) * 100
+    notes.append(f"漲{adv}跌{dec}")
+    details["漲跌家數"] = f"漲 {adv}／跌 {dec}（{src}）"
+  except Exception as e:
+    print(f"  漲跌家數失敗: {e}")
+
+  try:
+    scores["大盤RSI"] = rsi(taiex_closes)
+    details["大盤RSI"] = "加權指數 RSI(6)"
+  except Exception as e:
+    print(f"  RSI 失敗: {e}")
+
+  try:
+    flow = fetch_institutional_flow()
+    scores["三大法人"] = percentile_rank(
+        [v for _, v in flow][-RANK_WINDOW:], flow[-1][1]
+    )
+    notes.append(f"法人{flow[-1][1] / 1e8:+.0f}億（{flow[-1][0]}）")
+    details["三大法人"] = f"買賣超 {flow[-1][1] / 1e8:+,.0f} 億・一年排名"
+  except Exception as e:
+    print(f"  三大法人失敗: {e}")
+
+  if foreign_series:
+    scores["外資期貨"] = percentile_rank(
+        foreign_series[-RANK_WINDOW:], foreign_series[-1]
+    )
+    details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
+
+  try:
+    us_vix_info, us_vix_chart = fetch_us_vix_and_chart()
+    scores["美股VIX"] = us_vix_info["sentimentScore"]
+    notes.append(f"美VIX {us_vix_info['price']}（{us_vix_info['date']}）")
+    details["美股VIX"] = (
+        f"VIX {us_vix_info['price']}（{us_vix_info['light']}・{us_vix_info['date']}）"
+    )
+  except Exception as e:
+    print(f"  美股 VIX 失敗: {e}")
+
+  tw_vix_info = fetch_tw_vix()
+  if tw_vix_info and tw_vix_info.get("sentimentScore") is not None:
+    scores["台股VIX"] = tw_vix_info["sentimentScore"]
+    notes.append(f"台VIX {tw_vix_info['price']}（{tw_vix_info['date']}）")
+    details["台股VIX"] = (
+        f"VIX {tw_vix_info['price']}（{tw_vix_info['light']}・{tw_vix_info['date']}）"
+    )
+
+  if not scores:
+    return None, "未計算", {}, "", [], us_vix_info, us_vix_chart, tw_vix_info
+
+  composite = round(sum(scores.values()) / len(scores), 1)
+  label = (
+      "極度恐懼"
+      if composite < 25
+      else (
+          "恐懼"
+          if composite < 45
+          else "中性" if composite < 55 else "貪婪" if composite < 75 else "極度貪婪"
+      )
+  )
+  detail = "、".join(f"{k} {v:.0f}" for k, v in scores.items())
+  items = [
+      {"name": k, "score": round(v, 1), "detail": details.get(k, "")}
+      for k, v in scores.items()
+  ]
+  return (
+      composite,
+      label,
+      scores,
+      f"{detail}（{'；'.join(notes)}）" if notes else detail,
+      items,
+      us_vix_info,
+      us_vix_chart,
+      tw_vix_info,
+  )
+
+
+# ==========================================
+# 8. 主程序執行
+# ==========================================
+def main():
+  now_str = now_tw().strftime("%Y-%m-%d %H:%M")
+
+  taiex_res, taiex_src = fetch_index("加權指數", "TAIEX", "^TWII")
+  otc_res, otc_src = fetch_index("櫃買指數", "TPEx", "^TWOII")
+  errors = []
+  if not taiex_res:
+    errors.append("加權指數")
+  if not otc_res:
+    errors.append("櫃買指數")
+  try:
+    foreign_date, foreign_net, foreign_change, foreign_series = (
+        fetch_foreign_futures()
+    )
+  except Exception as e:
+    print(f"  外資台指期抓取失敗: {e}")
+    errors.append("外資台指期")
+  try:
+    retail = fetch_retail("MTX", "小台")
+  except Exception as e:
+    print(f"  小台散戶多空比計算失敗: {e}")
+    errors.append("小台散戶多空比")
+  try:
+    micro = fetch_retail("TMF", "微台")
+  except Exception as e:
+    print(f"  微台散戶多空比計算失敗: {e}")
+    errors.append("微台散戶多空比")
+  try:
+    opt_date, opt_call, opt_put = fetch_foreign_options()
+  except Exception as e:
+    print(f"  外資選擇權抓取失敗: {e}")
+    errors.append("外資選擇權")
+  try:
+    pc_date, pc_ratio = fetch_pc_ratio()
+  except Exception as e:
+    print(f"  Put/Call 未平倉比抓取失敗: {e}")
+    errors.append("Put/Call 未平倉比")
+
+  if errors:
+    print(f"❌ 抓取失敗：{'、'.join(errors)}。暫不更新 data.json。")
+    sys.exit(1)
+
+  data_date = taiex_res["isoDates"][-1]
+  retail = retail[-CHART_DAYS:]
+  taiex_by_date = dict(zip(taiex_res["isoDates"], taiex_res["chart"]["close"]))
+  retail_date, retail_ratio, retail_long, retail_short = retail[-1]
+  micro_date, micro_ratio = micro[-1][0], micro[-1][1]
+
+  (
+      sentiment,
+      sentiment_label,
+      _,
+      sentiment_detail,
+      sentiment_items,
+      us_vix_info,
+      us_vix_chart,
+      tw_vix_info,
+  ) = compute_sentiment(data_date, taiex_res["chart"]["close"], foreign_series)
+
+  vix_source_parts = []
+  if us_vix_info:
+    vix_source_parts.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
+  if tw_vix_info:
+    vix_source_parts.append(f"台股 VIX FinMind（{tw_vix_info['date']}）")
+  vix_source_text = ("、" + "、".join(vix_source_parts)) if vix_source_parts else ""
+
+  final_data = {
+      "date": data_date,
+      "updateTime": now_str,
+      "chartDays": CHART_DAYS,
+      "sentiment": sentiment,
+      "sentimentStatus": sentiment_label,
+      "sentimentScores": sentiment_items,
+      "usVix": us_vix_info,
+      "twVix": tw_vix_info,
+      "foreignFutures": int(foreign_net),
+      "foreignChange": int(foreign_change),
+      "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
+      "retailSmall": retail_ratio,
+      "retailMicro": micro_ratio,
+      "pcRatio": pc_ratio,
+      "optionCall": int(opt_call),
+      "optionPut": int(opt_put),
+      "retailLong": int(retail_long),
+      "retailShort": int(retail_short),
+      "analysis": (
+          f"資料日期 {data_date}，於 {now_str}（台灣時間）更新。來源：加權指數"
+          f" {taiex_src}、櫃買指數 {otc_src}、外資台指期與小台／微台散戶多空比"
+          f" FinMind（{retail_date}／{micro_date}）、外資選擇權"
+          f" FinMind（{opt_date}）、P/C 未平倉比"
+          f" 期交所（{pc_date}）{vix_source_text}。情緒指數子分數：{sentiment_detail}。"
+      ),
+      "taiex": {
+          "price": taiex_res["price"],
+          "change": taiex_res["change"],
+          "changePercent": taiex_res["changePercent"],
+      },
+      "otc": {
+          "price": otc_res["price"],
+          "change": otc_res["change"],
+          "changePercent": otc_res["changePercent"],
+      },
+      "taiexChart": taiex_res["chart"],
+      "otcChart": otc_res["chart"],
+      "usVixChart": us_vix_chart,
+      "retailChart": {
+          "dates": [
+              datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
+              for d, *_ in retail
+          ],
+          "retailRatios": [r for _, r, *_ in retail],
+          "indexValues": [taiex_by_date.get(d) for d, *_ in retail],
+      },
+  }
+
+  with open("data.json", "w", encoding="utf-8") as f:
+    json.dump(final_data, f, ensure_ascii=False, indent=4)
+
+  print(f"\n✅ [{now_str}] data.json 已更新（資料日期 {data_date}）")
+
+
+if __name__ == "__main__":
+  main()
