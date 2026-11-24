@@ -1,4 +1,3 @@
-
 from datetime import datetime, timedelta
 import json
 import re
@@ -242,7 +241,7 @@ def score_to_status(score):
 def fetch_us_vix_data():
   """抓取美股 VIX (^VIX) 最新值、半圓分數與近 CHART_DAYS 序列 {iso_date: close}。"""
   print("抓取美股 VIX -> [yfinance ^VIX]")
-  hist = yf.Ticker("^VIX").history(period="6m")
+  hist = yf.Ticker("^VIX").history(period="6mo")
   if hist is None or hist.empty:
     raise RuntimeError("yfinance ^VIX 沒有資料")
 
@@ -276,32 +275,38 @@ def fetch_us_vix_data():
 
 
 def fetch_tw_vix_data():
-  """從期交所 vixMinNew 抓取台股 VIX 最新值、半圓分數與歷史序列 {iso_date: close}。"""
-  print("抓取台股 VIX -> [期交所 vixMinNew]")
-  html = requests.get(
-      "https://www.taifex.com.tw/cht/7/vixMinNew",
-      headers=HEADERS,
-      timeout=15,
-  ).text
-  records = []
-  for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
-    tds = [
-        re.sub(r"<[^>]+>|\s+", "", x)
-        for x in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
-    ]
-    if len(tds) >= 2 and re.match(r"^20\d\d/\d{1,2}/\d{1,2}$", tds[0]):
-      m = re.search(r"(\d+(?:\.\d+)?)", tds[1].replace(",", ""))
-      if m:
-        d_str = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
-        records.append((d_str, round(float(m.group(1)), 2)))
+  """透過 FinMind TaiwanOptionVix 抓取台股 VIX 最新值、半圓分數與近 CHART_DAYS 歷史序列。"""
+  print("抓取台股 VIX -> [FinMind TaiwanOptionVix]")
+  rows = finmind("TaiwanOptionVix", "", days=RETAIL_FETCH_DAYS)
+  df = pd.DataFrame(rows)
+  if df.empty or "date" not in df.columns:
+    raise RuntimeError("TaiwanOptionVix 回傳欄位不符")
 
-  if not records:
-    raise RuntimeError("期交所 vixMinNew 找不到資料列")
+  # 自動辨識數值欄位（常見為 vix / close / value）
+  num_cols = [c for c in df.columns if c not in ("date", "stock_id", "trading_session")]
+  val_col = next(
+      (c for c in ("vix", "VIX", "close", "Close", "value") if c in df.columns),
+      num_cols[0] if num_cols else None,
+  )
+  if not val_col:
+    raise RuntimeError(f"TaiwanOptionVix 找不到數值欄位: {list(df.columns)}")
 
-  records.sort(key=lambda x: x[0])
-  recent = records[-CHART_DAYS:]
-  latest_date, latest_val = records[-1]
-  prev_val = records[-2][1] if len(records) >= 2 else latest_val
+  df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+  df = df.dropna(subset=[val_col]).copy()
+  df["date"] = df["date"].astype(str).str.slice(0, 10)
+  # 若同一天有多筆（如分時），取當日最後一筆作為收盤值
+  df = df.sort_values("date").groupby("date", as_index=False).last()
+  if df.empty:
+    raise RuntimeError("TaiwanOptionVix 清理後無有效數據")
+
+  recent = df.tail(CHART_DAYS)
+  latest_date = str(recent["date"].iloc[-1])
+  latest_val = round(float(recent[val_col].iloc[-1]), 2)
+  prev_val = (
+      round(float(recent[val_col].iloc[-2]), 2)
+      if len(recent) >= 2
+      else latest_val
+  )
   change = round(latest_val - prev_val, 2)
   change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
   gauge_score = vix_to_gauge_score(latest_val)
@@ -314,12 +319,15 @@ def fetch_tw_vix_data():
       "score": gauge_score,
       "status": score_to_status(gauge_score),
   }
-  series_map = {d: v for d, v in recent}
+  series_map = {
+      str(d): round(float(v), 2)
+      for d, v in zip(recent["date"], recent[val_col])
+  }
   return tw_info, series_map
 
 
 def build_vix_compare_chart(us_map, tw_map):
-  """將美股 VIX 與台股 VIX 依日期合併成同一張對照圖表資料。"""
+  """將美股 VIX 與台股 VIX 依日期合併成同一張 90 日對照圖表資料。"""
   all_dates = sorted(set(us_map.keys()) | set(tw_map.keys()))[-CHART_DAYS:]
   return {
       "dates": [
@@ -539,7 +547,7 @@ def main():
   if us_vix_info:
     vix_sources.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
   if tw_vix_info:
-    vix_sources.append(f"台股 VIX 期交所（{tw_vix_info['date']}）")
+    vix_sources.append(f"台股 VIX FinMind（{tw_vix_info['date']}）")
   vix_source_text = ("、" + "、".join(vix_sources)) if vix_sources else ""
 
   final_data = {
