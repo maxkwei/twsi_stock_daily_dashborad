@@ -1,3 +1,4 @@
+
 from datetime import datetime, timedelta
 import json
 import re
@@ -221,26 +222,34 @@ def fetch_foreign_options():
 
 
 def vix_to_gauge_score(vix_val, low_vix=12.0, high_vix=40.0):
-  """把美股 VIX 轉成與半圓情緒儀表板一致的 0~100 分數（VIX 越低越平靜/分數越高，越高越恐慌/分數越低）。"""
+  """把 VIX 轉成與半圓情緒儀表板一致的 0~100 分數（VIX 越低越平靜/分數越高，越高越恐慌/分數越低）。"""
   score = (high_vix - float(vix_val)) / (high_vix - low_vix) * 100.0
   return round(max(0.0, min(100.0, score)), 1)
 
 
+def score_to_status(score):
+  return (
+      "極度恐懼"
+      if score < 25
+      else (
+          "恐懼"
+          if score < 45
+          else "中性" if score < 55 else "貪婪" if score < 75 else "極度貪婪"
+      )
+  )
+
+
 def fetch_us_vix_data():
-  """抓取美股 VIX (^VIX) 最新值、半圓儀表板分數（0~100）與可選的 90 日走勢資料。"""
+  """抓取美股 VIX (^VIX) 最新值、半圓分數與近 CHART_DAYS 序列 {iso_date: close}。"""
   print("抓取美股 VIX -> [yfinance ^VIX]")
-  hist = yf.Ticker("^VIX").history(period="1y")
+  hist = yf.Ticker("^VIX").history(period="6m")
   if hist is None or hist.empty:
     raise RuntimeError("yfinance ^VIX 沒有資料")
 
   df = hist.reset_index().dropna(subset=["Close"]).copy()
   df["date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
-  for col in ("Open", "High", "Low", "Close"):
-    df[col] = df[col].astype(float)
-
-  df["ma20"] = df["Close"].rolling(window=20, min_periods=1).mean()
-  df["ma60"] = df["Close"].rolling(window=60, min_periods=1).mean()
+  df["Close"] = df["Close"].astype(float)
 
   latest = round(float(df["Close"].iloc[-1]), 2)
   prev = round(float(df["Close"].iloc[-2]), 2) if len(df) >= 2 else latest
@@ -248,23 +257,12 @@ def fetch_us_vix_data():
   change_pct = round((change / prev) * 100.0, 2) if prev else 0.0
   trade_date = str(df["date"].iloc[-1])
   gauge_score = vix_to_gauge_score(latest)
-  gauge_label = (
-      "極度恐懼"
-      if gauge_score < 25
-      else (
-          "恐懼"
-          if gauge_score < 45
-          else (
-              "中性"
-              if gauge_score < 55
-              else "貪婪" if gauge_score < 75 else "極度貪婪"
-          )
-      )
-  )
 
   recent = df.tail(CHART_DAYS)
-  iso_dates = recent["date"].tolist()
-  r2 = lambda s: [round(float(x), 2) for x in s.tolist()]
+  series_map = {
+      str(d): round(float(c), 2)
+      for d, c in zip(recent["date"], recent["Close"])
+  }
 
   vix_info = {
       "date": trade_date,
@@ -272,22 +270,64 @@ def fetch_us_vix_data():
       "change": change,
       "changePercent": change_pct,
       "score": gauge_score,
-      "status": gauge_label,
+      "status": score_to_status(gauge_score),
   }
-  vix_90d_chart = {
+  return vix_info, series_map
+
+
+def fetch_tw_vix_data():
+  """從期交所 vixMinNew 抓取台股 VIX 最新值、半圓分數與歷史序列 {iso_date: close}。"""
+  print("抓取台股 VIX -> [期交所 vixMinNew]")
+  html = requests.get(
+      "https://www.taifex.com.tw/cht/7/vixMinNew",
+      headers=HEADERS,
+      timeout=15,
+  ).text
+  records = []
+  for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+    tds = [
+        re.sub(r"<[^>]+>|\s+", "", x)
+        for x in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+    ]
+    if len(tds) >= 2 and re.match(r"^20\d\d/\d{1,2}/\d{1,2}$", tds[0]):
+      m = re.search(r"(\d+(?:\.\d+)?)", tds[1].replace(",", ""))
+      if m:
+        d_str = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
+        records.append((d_str, round(float(m.group(1)), 2)))
+
+  if not records:
+    raise RuntimeError("期交所 vixMinNew 找不到資料列")
+
+  records.sort(key=lambda x: x[0])
+  recent = records[-CHART_DAYS:]
+  latest_date, latest_val = records[-1]
+  prev_val = records[-2][1] if len(records) >= 2 else latest_val
+  change = round(latest_val - prev_val, 2)
+  change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
+  gauge_score = vix_to_gauge_score(latest_val)
+
+  tw_info = {
+      "date": latest_date,
+      "price": latest_val,
+      "change": change,
+      "changePercent": change_pct,
+      "score": gauge_score,
+      "status": score_to_status(gauge_score),
+  }
+  series_map = {d: v for d, v in recent}
+  return tw_info, series_map
+
+
+def build_vix_compare_chart(us_map, tw_map):
+  """將美股 VIX 與台股 VIX 依日期合併成同一張對照圖表資料。"""
+  all_dates = sorted(set(us_map.keys()) | set(tw_map.keys()))[-CHART_DAYS:]
+  return {
       "dates": [
-          datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
-          for d in iso_dates
+          datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d in all_dates
       ],
-      "open": r2(recent["Open"]),
-      "high": r2(recent["High"]),
-      "low": r2(recent["Low"]),
-      "close": r2(recent["Close"]),
-      "prices": r2(recent["Close"]),
-      "ma20": r2(recent["ma20"]),
-      "ma60": r2(recent["ma60"]),
+      "usClose": [us_map.get(d) for d in all_dates],
+      "twClose": [tw_map.get(d) for d in all_dates],
   }
-  return vix_info, vix_90d_chart
 
 
 def percentile_rank(values, today):
@@ -360,7 +400,9 @@ def fetch_institutional_flow():
 
 def compute_sentiment(data_date, taiex_closes, foreign_series):
   scores, notes, details = {}, [], {}
-  us_vix_info, us_vix_90d = None, None
+  us_vix_info, us_map = None, {}
+  tw_vix_info, tw_map = None, {}
+
   try:
     adv, dec, src = fetch_breadth(data_date)
     scores["漲跌家數"] = adv / (adv + dec) * 100
@@ -368,11 +410,13 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
     details["漲跌家數"] = f"漲 {adv}／跌 {dec}（{src}）"
   except Exception as e:
     print(f"  漲跌家數失敗: {e}")
+
   try:
     scores["大盤RSI"] = rsi(taiex_closes)
     details["大盤RSI"] = "加權指數 RSI(6)"
   except Exception as e:
     print(f"  RSI 失敗: {e}")
+
   try:
     flow = fetch_institutional_flow()
     scores["三大法人"] = percentile_rank(
@@ -382,33 +426,39 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
     details["三大法人"] = f"買賣超 {flow[-1][1] / 1e8:+,.0f} 億・一年排名"
   except Exception as e:
     print(f"  三大法人失敗: {e}")
+
   if foreign_series:
     scores["外資期貨"] = percentile_rank(
         foreign_series[-RANK_WINDOW:], foreign_series[-1]
     )
     details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
+
   try:
-    us_vix_info, us_vix_90d = fetch_us_vix_data()
-    scores["美股VIX"] = us_vix_info["score"]
-    notes.append(f"美VIX {us_vix_info['price']}（{us_vix_info['date']}）")
-    details["美股VIX"] = (
-        f"VIX {us_vix_info['price']}（{us_vix_info['status']}・{us_vix_info['date']}）"
-    )
+    us_vix_info, us_map = fetch_us_vix_data()
   except Exception as e:
     print(f"  美股 VIX 失敗: {e}")
 
+  try:
+    tw_vix_info, tw_map = fetch_tw_vix_data()
+  except Exception as e:
+    print(f"  台股 VIX 失敗: {e}")
+
+  vix_compare_chart = build_vix_compare_chart(us_map, tw_map)
+
   if not scores:
-    return None, "未計算", {}, "", [], us_vix_info, us_vix_90d
+    return (
+        None,
+        "未計算",
+        {},
+        "",
+        [],
+        us_vix_info,
+        tw_vix_info,
+        vix_compare_chart,
+    )
+
   composite = round(sum(scores.values()) / len(scores), 1)
-  label = (
-      "極度恐懼"
-      if composite < 25
-      else (
-          "恐懼"
-          if composite < 45
-          else "中性" if composite < 55 else "貪婪" if composite < 75 else "極度貪婪"
-      )
-  )
+  label = score_to_status(composite)
   detail = "、".join(f"{k} {v:.0f}" for k, v in scores.items())
   items = [
       {"name": k, "score": round(v, 1), "detail": details.get(k, "")}
@@ -421,7 +471,8 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
       f"{detail}（{'；'.join(notes)}）" if notes else detail,
       items,
       us_vix_info,
-      us_vix_90d,
+      tw_vix_info,
+      vix_compare_chart,
   )
 
 
@@ -480,12 +531,16 @@ def main():
       sentiment_detail,
       sentiment_items,
       us_vix_info,
-      us_vix_90d,
+      tw_vix_info,
+      vix_compare_chart,
   ) = compute_sentiment(data_date, taiex_res["chart"]["close"], foreign_series)
 
-  vix_source_text = (
-      f"、美股 VIX yfinance（{us_vix_info['date']}）" if us_vix_info else ""
-  )
+  vix_sources = []
+  if us_vix_info:
+    vix_sources.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
+  if tw_vix_info:
+    vix_sources.append(f"台股 VIX 期交所（{tw_vix_info['date']}）")
+  vix_source_text = ("、" + "、".join(vix_sources)) if vix_sources else ""
 
   final_data = {
       "date": data_date,
@@ -495,6 +550,8 @@ def main():
       "sentimentStatus": sentiment_label,
       "sentimentScores": sentiment_items,
       "usVix": us_vix_info,
+      "twVix": tw_vix_info,
+      "vixCompareChart": vix_compare_chart,
       "foreignFutures": int(foreign_net),
       "foreignChange": int(foreign_change),
       "foreignNote": f"外資台指期淨未平倉（{foreign_date}）",
@@ -524,7 +581,6 @@ def main():
       },
       "taiexChart": taiex_res["chart"],
       "otcChart": otc_res["chart"],
-      "usVixChart": us_vix_90d,
       "retailChart": {
           "dates": [
               datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
