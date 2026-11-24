@@ -573,4 +573,285 @@
         const n = chartData.dates.length;
         const isUp = i => chartData.close[i] >= chartData.open[i];
         const candleColors = [...Array(n).keys()].map(i => isUp(i) ? UP : DOWN);
-        const wicks = [...Array(
+        const wicks = [...Array(n).keys()].map(i => [chartData.low[i], chartData.high[i]]);
+        const bodies = [...Array(n).keys()].map(i => {
+            const o = chartData.open[i], c = chartData.close[i];
+            return o === c ? [o - 0.0005 * o, c + 0.0005 * c] : [o, c];
+        });
+        const volumes = Array.isArray(chartData.volumes) ? chartData.volumes : Array(n).fill(0);
+        const volumeColors = Array.isArray(chartData.volumeColors) ? chartData.volumeColors : candleColors;
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: chartData.dates,
+                datasets: [
+                    {
+                        type: 'line',
+                        label: '20MA',
+                        data: chartData.ma20,
+                        borderColor: '#f5a623',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        yAxisID: 'yPrice',
+                        order: 0
+                    },
+                    {
+                        type: 'line',
+                        label: '60MA',
+                        data: chartData.ma60,
+                        borderColor: '#8b572a',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        yAxisID: 'yPrice',
+                        order: 0
+                    },
+                    {
+                        label: '影線',
+                        data: wicks,
+                        backgroundColor: candleColors,
+                        yAxisID: 'yPrice',
+                        grouped: false,
+                        barPercentage: 0.12,
+                        categoryPercentage: 1,
+                        order: 2
+                    },
+                    {
+                        label: 'K棒',
+                        data: bodies,
+                        backgroundColor: candleColors,
+                        yAxisID: 'yPrice',
+                        grouped: false,
+                        barPercentage: 0.7,
+                        categoryPercentage: 1,
+                        order: 1
+                    },
+                    {
+                        label: '成交量',
+                        data: volumes,
+                        backgroundColor: volumeColors,
+                        yAxisID: 'yVolume',
+                        grouped: false,
+                        barPercentage: 0.7,
+                        categoryPercentage: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        filter: item => item.dataset.label !== '影線',
+                        callbacks: {
+                            label: item => {
+                                const i = item.dataIndex, f = v => v.toLocaleString();
+                                if (item.dataset.label === 'K棒') {
+                                    return `開 ${f(chartData.open[i])}  高 ${f(chartData.high[i])}  低 ${f(chartData.low[i])}  收 ${f(chartData.close[i])}`;
+                                }
+                                if (item.dataset.label === '成交量') return `成交金額 ${f(volumes[i])} 億`;
+                                return `${item.dataset.label} ${f(item.raw)}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+                    yVolume: {
+                        type: 'linear',
+                        position: 'left',
+                        stack: 'chart',
+                        stackWeight: 1,
+                        beginAtZero: true,
+                        grid: { display: false },
+                        ticks: { display: false }
+                    },
+                    yPrice: {
+                        type: 'linear',
+                        position: 'left',
+                        stack: 'chart',
+                        stackWeight: 3,
+                        offset: true,
+                        beginAtZero: false,
+                        grace: '3%',
+                        grid: { color: '#f0f0f0' },
+                        ticks: { callback: v => v.toLocaleString() }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderUsVix90dChart(chartData) {
+        const card = document.getElementById('us-vix-90d-card');
+        if (!chartData || !Array.isArray(chartData.dates) || !chartData.dates.length) return;
+        card.style.display = 'flex';
+        const ctx = document.getElementById('usVix90dChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.dates,
+                datasets: [
+                    {
+                        label: 'VIX 收盤',
+                        data: chartData.close,
+                        borderColor: '#2563eb',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.15
+                    },
+                    {
+                        label: '20MA',
+                        data: chartData.ma20,
+                        borderColor: '#f5a623',
+                        borderWidth: 1.5,
+                        pointRadius: 0
+                    },
+                    {
+                        label: '60MA',
+                        data: chartData.ma60,
+                        borderColor: '#8b572a',
+                        borderWidth: 1.5,
+                        pointRadius: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+                    y: { beginAtZero: false, grace: '5%', grid: { color: '#f0f0f0' } }
+                }
+            }
+        });
+    }
+
+    function sentimentColor(v) {
+        const g = [54, 179, 126], y = [255, 171, 0], r = [255, 86, 48];
+        const t = Math.max(0, Math.min(100, v)) / 50;
+        const [a, b, k] = t <= 1 ? [g, y, t] : [y, r, t - 1];
+        return `rgb(${a.map((c, i) => Math.round(c + (b[i] - c) * k)).join(',')})`;
+    }
+
+    function arcPoint(v, radius = 90) {
+        const ang = Math.PI * (1 - v / 100);
+        return [120 + radius * Math.cos(ang), 120 - radius * Math.sin(ang)];
+    }
+
+    function renderSemiGauge(bandsId, needleId, valId, statusId, cardId, score, statusText) {
+        const bands = [[0, 25], [25, 45], [45, 55], [55, 75], [75, 100]];
+        document.getElementById(bandsId).innerHTML = bands.map(([a, b]) => {
+            const [x1, y1] = arcPoint(a), [x2, y2] = arcPoint(b);
+            return `<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} A 90 90 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${sentimentColor((a + b) / 2)}"/>`;
+        }).join('');
+
+        const valEl = document.getElementById(valId);
+        const badge = document.getElementById(statusId);
+        const needle = document.getElementById(needleId);
+        badge.innerText = statusText || '—';
+
+        if (score == null || Number.isNaN(Number(score))) {
+            valEl.innerText = '—';
+            needle.style.display = 'none';
+        } else {
+            const v = Number(score);
+            const color = sentimentColor(v);
+            needle.style.display = '';
+            valEl.innerText = v;
+            valEl.style.color = color;
+            badge.style.background = color;
+            badge.style.borderColor = color;
+            badge.style.color = '#fff';
+            document.getElementById(cardId).style.borderTopColor = color;
+            needle.style.transform = `rotate(${(v - 50) * 1.8}deg)`;
+        }
+    }
+
+    function renderSentiment(data) {
+        renderSemiGauge('gauge-bands', 'gauge-needle', 'sentiment-val', 'sentiment-status', 'sentiment-card', data.sentiment, data.sentimentStatus);
+
+        const subs = data.sentimentScores || [];
+        document.getElementById('sentiment-subs').innerHTML = subs.map(s => `
+            <div class="sentiment-sub">
+                <div class="ss-name">${s.name}</div>
+                <div class="ss-score" style="color:${sentimentColor(s.score)}">${s.score.toFixed(0)}</div>
+                <div class="ss-bar"><div style="width:${s.score}%;background:${sentimentColor(s.score)}"></div></div>
+                <div class="ss-detail">${s.detail}</div>
+            </div>`).join('');
+
+        if (data.usVix) {
+            const vix = data.usVix;
+            const statusText = vix.status || vix.light || '';
+            renderSemiGauge('vix-gauge-bands', 'vix-gauge-needle', 'vix-gauge-val', 'vix-gauge-status', 'us-vix-gauge-card', vix.score, statusText);
+            document.getElementById('us-vix-date-badge').innerText = `美股日期 ${vix.date || '----'}`;
+            const sign = Number(vix.change) >= 0 ? '+' : '';
+            document.getElementById('vix-gauge-meta').innerText =
+                `VIX ${vix.price}（${sign}${vix.change} / ${sign}${vix.changePercent}%）・數值越高越恐慌，半圓刻度越低`;
+
+            document.getElementById('us-vix-90d-price').innerText = Number(vix.price).toFixed(2);
+            const chgEl = document.getElementById('us-vix-90d-change');
+            chgEl.innerText = `${sign}${vix.change} (${sign}${vix.changePercent}%)`;
+            chgEl.style.color = Number(vix.change) >= 0 ? 'var(--red-color)' : 'var(--green-color)';
+        }
+    }
+
+    async function loadDashboardData() {
+        try {
+            const res = await fetch('./data.json?t=' + new Date().getTime());
+            if (!res.ok) throw new Error("無數據");
+            const data = await res.json();
+
+            document.getElementById('data-date').innerText = '資料日期 ' + data.date;
+            const NA = '—';
+            const num = v => v == null ? NA : v.toLocaleString();
+            const signedPct = v => v == null ? NA : (v >= 0 ? '+' : '') + v + '%';
+
+            renderSentiment(data);
+
+            document.getElementById('foreign-futures').innerText = (data.foreignFutures < 0 ? '' : '+') + data.foreignFutures.toLocaleString() + ' 口';
+            document.getElementById('foreign-change').innerText = `較昨日 ${data.foreignChange >= 0 ? '+' : ''}${data.foreignChange.toLocaleString()} 口 | ${data.foreignNote}`;
+
+            const signColor = (id, v) => { if (v != null) document.getElementById(id).style.color = v >= 0 ? 'var(--red-color)' : 'var(--green-color)'; };
+            const signedNum = v => v == null ? NA : (v >= 0 ? '+' : '') + v.toLocaleString();
+            document.getElementById('retail-small').innerText = signedPct(data.retailSmall);
+            document.getElementById('retail-micro').innerText = signedPct(data.retailMicro);
+            signColor('retail-small', data.retailSmall);
+            signColor('foreign-futures', data.foreignFutures);
+            signColor('retail-micro', data.retailMicro);
+            document.getElementById('pc-ratio').innerText = data.pcRatio == null ? NA : data.pcRatio + '%';
+
+            document.getElementById('foreign-options').innerText = `${signedNum(data.optionCall)} / ${signedNum(data.optionPut)}`;
+            document.getElementById('analysis-text').innerText = data.analysis;
+            document.getElementById('update-time').innerText = '報表產出 ' + data.updateTime;
+
+            document.getElementById('retail-long-val').innerText = num(data.retailLong);
+            document.getElementById('retail-short-val').innerText = num(data.retailShort);
+            document.getElementById('retail-small-chart-val').innerText = signedPct(data.retailSmall);
+            signColor('retail-small-chart-val', data.retailSmall);
+
+            document.getElementById('taiex-price').innerText = data.taiex.price.toLocaleString();
+            document.getElementById('taiex-change').innerText = `${data.taiex.change >= 0 ? '+' : ''}${data.taiex.change} (${data.taiex.changePercent}%)`;
+            document.getElementById('taiex-change').style.color = data.taiex.change >= 0 ? 'var(--red-color)' : 'var(--green-color)';
+
+            document.getElementById('otc-price').innerText = data.otc.price.toLocaleString();
+            document.getElementById('otc-change').innerText = `${data.otc.change >= 0 ? '+' : ''}${data.otc.change} (${data.otc.changePercent}%)`;
+            document.getElementById('otc-change').style.color = data.otc.change >= 0 ? 'var(--red-color)' : 'var(--green-color)';
+
+            renderIndexChart('taiexChart', data.taiexChart);
+            renderIndexChart('otcChart', data.otcChart);
+            renderRetailOverlayChart(data.retailChart);
+            renderUsVix90dChart(data.usVixChart);
+
+        } catch (e) {
+            console.error("載入資料失敗:", e);
+        }
+    }
+
+    loadDashboardData();
+</script>
+
+</body>
+</html>
