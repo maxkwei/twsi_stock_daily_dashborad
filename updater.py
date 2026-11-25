@@ -20,7 +20,7 @@ INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
 SENTIMENT_LOOKBACK_DAYS = 400
 RANK_WINDOW = 250
-MAX_CLOSE_DATE = None  # None = 每天自動抓取最新已更新交易日
+MAX_CLOSE_DATE = None
 
 UP_COLOR = "#de350b"
 DOWN_COLOR = "#1a1a1a"
@@ -323,8 +323,8 @@ def fetch_us_vix_data():
 
 
 def fetch_tw_vix_data(trading_iso_dates):
-  """直接向期交所抓取台股 VIX（TAIWAN VIX）最新值與近 90 日收盤序列。"""
-  print("抓取台股 VIX -> [期交所 TAIFEX getVixData]")
+  """向期交所抓取台股 VIX（TAIWAN VIX）最新值與近期收盤序列。"""
+  print("抓取台股 VIX -> [期交所 TAIFEX]")
   series_map = {}
 
   for d_iso in trading_iso_dates[-CHART_DAYS:]:
@@ -358,31 +358,37 @@ def fetch_tw_vix_data(trading_iso_dates):
     except Exception:
       continue
 
-  if not series_map:
-    try:
-      r = requests.post(
-          "https://mis.taifex.com.tw/futures/api/getVolatilityQuotes",
-          headers={**HEADERS, "Content-Type": "application/json"},
-          json={},
-          timeout=10,
-      ).json()
-      quotes = r.get("RtData", {}).get("QuoteList", [])
-      for q in quotes:
-        if "VIX" in str(q.get("DispCName", "")) or "VIX" in str(
-            q.get("SymbolID", "")
-        ):
-          val = float(q.get("CLastPrice") or q.get("CReferencePrice"))
+  try:
+    r = requests.post(
+        "https://mis.taifex.com.tw/futures/api/getVolatilityQuotes",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={},
+        timeout=10,
+    ).json()
+    quotes = r.get("RtData", {}).get("QuoteList", [])
+    for q in quotes:
+      if "VIX" in str(q.get("DispCName", "")) or "VIX" in str(
+          q.get("SymbolID", "")
+      ):
+        raw_val = q.get("CLastPrice") or q.get("CReferencePrice")
+        if raw_val not in (None, "", "-"):
+          val = round(float(raw_val), 2)
           d_iso = trading_iso_dates[-1]
-          series_map[d_iso] = round(val, 2)
-          break
-    except Exception as e:
-      print(f"  期交所備援行情失敗: {e}")
+          series_map.setdefault(d_iso, val)
+        break
+  except Exception as e:
+    print(f"  期交所即時/最新行情補抓略過: {e}")
 
   if not series_map:
     print("  期交所台股 VIX 暫無資料（略過）")
     return None, {}
 
   sorted_dates = sorted(series_map.keys())
+  print(
+      f"  台股 VIX 序列範圍: {sorted_dates[0]} ~ {sorted_dates[-1]}"
+      f"（共 {len(sorted_dates)} 筆）"
+  )
+
   latest_date = sorted_dates[-1]
   latest_val = series_map[latest_date]
   prev_val = (
@@ -392,10 +398,6 @@ def fetch_tw_vix_data(trading_iso_dates):
   change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
   gauge_score = vix_to_gauge_score(latest_val)
 
-  print(
-      f"  台股 VIX 成功（期交所）: 日期={latest_date}, 數值={latest_val},"
-      f" 共 {len(series_map)} 天"
-  )
   tw_info = {
       "date": latest_date,
       "price": latest_val,
