@@ -20,7 +20,8 @@ INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
 SENTIMENT_LOOKBACK_DAYS = 400
 RANK_WINDOW = 250
-MAX_CLOSE_DATE = None
+SETTLE_HOUR_TW = 14
+TW_VIX_HISTORY_FILE = "tw_vix_history.json"
 
 UP_COLOR = "#de350b"
 DOWN_COLOR = "#1a1a1a"
@@ -28,6 +29,14 @@ DOWN_COLOR = "#1a1a1a"
 
 def now_tw():
   return datetime.now(TW)
+
+
+def effective_max_date():
+  """依台灣時間自動判斷：14:00 收盤前排除當日未收盤資料，14:00 後含當日。"""
+  t = now_tw()
+  if t.hour < SETTLE_HOUR_TW:
+    return (t - timedelta(days=1)).strftime("%Y-%m-%d")
+  return t.strftime("%Y-%m-%d")
 
 
 def finmind(dataset, data_id, days=120):
@@ -53,7 +62,7 @@ def finmind(dataset, data_id, days=120):
   return res["data"]
 
 
-def build_kline_output(df, max_date=MAX_CLOSE_DATE):
+def build_kline_output(df, max_date):
   """df 需有 date, open, high, low, close, volume 欄位（volume 單位：億元）。"""
   df = df.copy()
   df["date"] = df["date"].astype(str).str.slice(0, 10)
@@ -108,7 +117,7 @@ def build_kline_output(df, max_date=MAX_CLOSE_DATE):
   }
 
 
-def fetch_index_from_yf(yf_symbol):
+def fetch_index_from_yf(yf_symbol, max_date):
   start_str = (now_tw() - timedelta(days=INDEX_FETCH_DAYS)).strftime("%Y-%m-%d")
   end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
   df = yf.Ticker(yf_symbol).history(start=start_str, end=end_str)
@@ -127,10 +136,10 @@ def fetch_index_from_yf(yf_symbol):
   )
   vol_series = df["Volume"] if "Volume" in df.columns else 0
   df["volume"] = pd.to_numeric(vol_series, errors="coerce").fillna(0) / 1e8
-  return build_kline_output(df, max_date=MAX_CLOSE_DATE)
+  return build_kline_output(df, max_date=max_date)
 
 
-def fetch_index(name, finmind_id, yf_symbol):
+def fetch_index(name, finmind_id, yf_symbol, max_date):
   print(f"抓取{name} -> [Level 1: FinMind {finmind_id}]")
   fm_out = None
   try:
@@ -140,7 +149,7 @@ def fetch_index(name, finmind_id, yf_symbol):
     df["volume"] = (
         pd.to_numeric(df["Trading_money"], errors="coerce").fillna(0) / 1e8
     )
-    fm_out = build_kline_output(df, max_date=MAX_CLOSE_DATE)
+    fm_out = build_kline_output(df, max_date=max_date)
     print(f"  FinMind {name} 最新日期: {fm_out['isoDates'][-1]}")
   except Exception as e:
     print(f"  Level 1 失敗: {e}")
@@ -148,7 +157,7 @@ def fetch_index(name, finmind_id, yf_symbol):
   print(f"抓取{name} -> [Level 2: yfinance {yf_symbol}]")
   yf_out = None
   try:
-    yf_out = fetch_index_from_yf(yf_symbol)
+    yf_out = fetch_index_from_yf(yf_symbol, max_date=max_date)
     if yf_out:
       print(f"  yfinance {name} 最新日期: {yf_out['isoDates'][-1]}")
   except Exception as e:
@@ -165,7 +174,7 @@ def fetch_index(name, finmind_id, yf_symbol):
   return None, None
 
 
-def fetch_foreign_futures():
+def fetch_foreign_futures(max_date):
   print("抓取外資台指期淨未平倉 -> [FinMind]")
   rows = [
       r
@@ -174,8 +183,7 @@ def fetch_foreign_futures():
           "TX",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["institutional_investors"] == "外資"
-      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
+      if r["institutional_investors"] == "外資" and r["date"] <= max_date
   ]
   rows.sort(key=lambda r: r["date"])
   if len(rows) < 2:
@@ -188,13 +196,13 @@ def fetch_foreign_futures():
   return rows[-1]["date"], net[-1], net[-1] - net[-2], net
 
 
-def fetch_retail(product="MTX", label="小台"):
+def fetch_retail(max_date, product="MTX", label="小台"):
   print(f"抓取{label}散戶多空比 -> [FinMind {product}]")
   inst_long, inst_short = {}, {}
   for r in finmind(
       "TaiwanFuturesInstitutionalInvestors", product, days=RETAIL_FETCH_DAYS
   ):
-    if MAX_CLOSE_DATE and r["date"] > MAX_CLOSE_DATE:
+    if r["date"] > max_date:
       continue
     inst_long[r["date"]] = (
         inst_long.get(r["date"], 0) + r["long_open_interest_balance_volume"]
@@ -204,9 +212,7 @@ def fetch_retail(product="MTX", label="小台"):
     )
   total_oi = {}
   for r in finmind("TaiwanFuturesDaily", product, days=RETAIL_FETCH_DAYS):
-    if (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE) and r.get(
-        "trading_session"
-    ) == "position":
+    if r["date"] <= max_date and r.get("trading_session") == "position":
       total_oi[r["date"]] = total_oi.get(r["date"], 0) + r["open_interest"]
   out = []
   for d in sorted(inst_long):
@@ -225,7 +231,7 @@ def fetch_retail(product="MTX", label="小台"):
   return out
 
 
-def fetch_pc_ratio():
+def fetch_pc_ratio(max_date):
   print("抓取 Put/Call 未平倉比 -> [期交所]")
   html = requests.get(
       "https://www.taifex.com.tw/cht/3/pcRatio", headers=HEADERS, timeout=15
@@ -237,18 +243,17 @@ def fetch_pc_ratio():
     ]
     if len(tds) >= 7 and re.match(r"20\d\d/\d+/\d+$", tds[0]):
       date = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
-      if not MAX_CLOSE_DATE or date <= MAX_CLOSE_DATE:
+      if date <= max_date:
         return date, float(tds[6].replace(",", ""))
   raise RuntimeError("期交所 P/C 頁面找不到資料列")
 
 
-def fetch_foreign_options():
+def fetch_foreign_options(max_date):
   print("抓取外資選擇權 -> [FinMind TXO]")
   rows = [
       r
       for r in finmind("TaiwanOptionInstitutionalInvestors", "TXO", days=15)
-      if r["institutional_investors"] == "外資"
-      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
+      if r["institutional_investors"] == "外資" and r["date"] <= max_date
   ]
   if not rows:
     raise RuntimeError("沒有外資選擇權資料")
@@ -281,7 +286,7 @@ def score_to_status(score):
   )
 
 
-def fetch_us_vix_data():
+def fetch_us_vix_data(max_date):
   print("抓取美股 VIX -> [yfinance ^VIX]")
   start_str = (now_tw() - timedelta(days=180)).strftime("%Y-%m-%d")
   end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -292,8 +297,7 @@ def fetch_us_vix_data():
   df = hist.reset_index().dropna(subset=["Close"]).copy()
   date_col = "Date" if "Date" in df.columns else df.columns[0]
   df["date"] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
-  if MAX_CLOSE_DATE:
-    df = df[df["date"] <= MAX_CLOSE_DATE]
+  df = df[df["date"] <= max_date]
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
   df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
   df = df.dropna(subset=["Close"]).reset_index(drop=True)
@@ -322,13 +326,38 @@ def fetch_us_vix_data():
   return vix_info, series_map
 
 
-def fetch_tw_vix_data(trading_iso_dates):
-  """向期交所抓取台股 VIX（TAIWAN VIX）最新值與近期收盤序列。"""
-  print("抓取台股 VIX -> [期交所 TAIFEX]")
-  series_map = {}
+def load_and_merge_tw_vix_history(new_map, max_date):
+  """讀取既有台股 VIX 累積檔、合併新抓到的日期並依日期排序儲存。"""
+  history = {}
+  try:
+    with open(TW_VIX_HISTORY_FILE, "r", encoding="utf-8") as f:
+      loaded = json.load(f)
+      if isinstance(loaded, dict):
+        for k, v in loaded.items():
+          if k <= max_date and v is not None:
+            history[str(k)] = round(float(v), 2)
+  except FileNotFoundError:
+    pass
+  except Exception as e:
+    print(f"  讀取 {TW_VIX_HISTORY_FILE} 略過: {e}")
+
+  for k, v in new_map.items():
+    if k <= max_date and v is not None:
+      history[str(k)] = round(float(v), 2)
+
+  sorted_history = dict(sorted(history.items()))
+  with open(TW_VIX_HISTORY_FILE, "w", encoding="utf-8") as f:
+    json.dump(sorted_history, f, ensure_ascii=False, indent=2)
+  return sorted_history
+
+
+def fetch_tw_vix_data(trading_iso_dates, max_date):
+  """向期交所抓取台股 VIX（TAIWAN VIX），並與歷史累積檔合併以逐步累積序列。"""
+  print("抓取台股 VIX -> [期交所 TAIFEX + 歷史累積]")
+  fetched_map = {}
 
   for d_iso in trading_iso_dates[-CHART_DAYS:]:
-    if MAX_CLOSE_DATE and d_iso > MAX_CLOSE_DATE:
+    if d_iso > max_date:
       continue
     ymd = d_iso.replace("-", "")
     try:
@@ -354,38 +383,19 @@ def fetch_tw_vix_data(trading_iso_dates):
           except ValueError:
             pass
       if vals:
-        series_map[d_iso] = round(vals[-1], 2)
+        fetched_map[d_iso] = round(vals[-1], 2)
     except Exception:
       continue
 
-  try:
-    r = requests.post(
-        "https://mis.taifex.com.tw/futures/api/getVolatilityQuotes",
-        headers={**HEADERS, "Content-Type": "application/json"},
-        json={},
-        timeout=10,
-    ).json()
-    quotes = r.get("RtData", {}).get("QuoteList", [])
-    for q in quotes:
-      if "VIX" in str(q.get("DispCName", "")) or "VIX" in str(
-          q.get("SymbolID", "")
-      ):
-        raw_val = q.get("CLastPrice") or q.get("CReferencePrice")
-        if raw_val not in (None, "", "-"):
-          val = round(float(raw_val), 2)
-          d_iso = trading_iso_dates[-1]
-          series_map.setdefault(d_iso, val)
-        break
-  except Exception as e:
-    print(f"  期交所即時/最新行情補抓略過: {e}")
-
-  if not series_map:
+  merged_history = load_and_merge_tw_vix_history(fetched_map, max_date)
+  if not merged_history:
     print("  期交所台股 VIX 暫無資料（略過）")
     return None, {}
 
-  sorted_dates = sorted(series_map.keys())
+  sorted_dates = sorted(merged_history.keys())[-CHART_DAYS:]
+  series_map = {d: merged_history[d] for d in sorted_dates}
   print(
-      f"  台股 VIX 序列範圍: {sorted_dates[0]} ~ {sorted_dates[-1]}"
+      f"  台股 VIX 累積序列範圍: {sorted_dates[0]} ~ {sorted_dates[-1]}"
       f"（共 {len(sorted_dates)} 筆）"
   )
 
@@ -474,7 +484,7 @@ def fetch_breadth(day):
   )
 
 
-def fetch_institutional_flow():
+def fetch_institutional_flow(max_date):
   print("抓取三大法人買賣超 -> [FinMind]")
   rows = [
       r
@@ -483,13 +493,14 @@ def fetch_institutional_flow():
           "",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["name"] == "total"
-      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
+      if r["name"] == "total" and r["date"] <= max_date
   ]
   return sorted((r["date"], r["buy"] - r["sell"]) for r in rows)
 
 
-def compute_sentiment(data_date, taiex_closes, foreign_series, taiex_iso_dates):
+def compute_sentiment(
+    data_date, taiex_closes, foreign_series, taiex_iso_dates, max_date
+):
   scores, notes, details = {}, [], {}
   us_vix_info, us_map = None, {}
   tw_vix_info, tw_map = None, {}
@@ -509,7 +520,7 @@ def compute_sentiment(data_date, taiex_closes, foreign_series, taiex_iso_dates):
     print(f"  RSI 失敗: {e}")
 
   try:
-    flow = fetch_institutional_flow()
+    flow = fetch_institutional_flow(max_date)
     scores["三大法人"] = percentile_rank(
         [v for _, v in flow][-RANK_WINDOW:], flow[-1][1]
     )
@@ -525,11 +536,11 @@ def compute_sentiment(data_date, taiex_closes, foreign_series, taiex_iso_dates):
     details["外資期貨"] = f"淨未平倉 {foreign_series[-1]:+,} 口・一年排名"
 
   try:
-    us_vix_info, us_map = fetch_us_vix_data()
+    us_vix_info, us_map = fetch_us_vix_data(max_date)
   except Exception as e:
     print(f"  美股 VIX 失敗: {e}")
 
-  tw_vix_info, tw_map = fetch_tw_vix_data(taiex_iso_dates)
+  tw_vix_info, tw_map = fetch_tw_vix_data(taiex_iso_dates, max_date)
   vix_compare_chart = build_vix_compare_chart(us_map, tw_map)
 
   if not scores:
@@ -565,9 +576,11 @@ def compute_sentiment(data_date, taiex_closes, foreign_series, taiex_iso_dates):
 
 def main():
   now_str = now_tw().strftime("%Y-%m-%d %H:%M")
+  max_date = effective_max_date()
+  print(f"基準收盤上限日期（台灣時間 {SETTLE_HOUR_TW}:00 判定）: {max_date}")
 
-  taiex_res, taiex_src = fetch_index("加權指數", "TAIEX", "^TWII")
-  otc_res, otc_src = fetch_index("櫃買指數", "TPEx", "^TWOII")
+  taiex_res, taiex_src = fetch_index("加權指數", "TAIEX", "^TWII", max_date)
+  otc_res, otc_src = fetch_index("櫃買指數", "TPEx", "^TWOII", max_date)
   errors = []
   if not taiex_res:
     errors.append("加權指數")
@@ -575,28 +588,28 @@ def main():
     errors.append("櫃買指數")
   try:
     foreign_date, foreign_net, foreign_change, foreign_series = (
-        fetch_foreign_futures()
+        fetch_foreign_futures(max_date)
     )
   except Exception as e:
     print(f"  外資台指期抓取失敗: {e}")
     errors.append("外資台指期")
   try:
-    retail = fetch_retail("MTX", "小台")
+    retail = fetch_retail(max_date, "MTX", "小台")
   except Exception as e:
     print(f"  小台散戶多空比計算失敗: {e}")
     errors.append("小台散戶多空比")
   try:
-    micro = fetch_retail("TMF", "微台")
+    micro = fetch_retail(max_date, "TMF", "微台")
   except Exception as e:
     print(f"  微台散戶多空比計算失敗: {e}")
     errors.append("微台散戶多空比")
   try:
-    opt_date, opt_call, opt_put = fetch_foreign_options()
+    opt_date, opt_call, opt_put = fetch_foreign_options(max_date)
   except Exception as e:
     print(f"  外資選擇權抓取失敗: {e}")
     errors.append("外資選擇權")
   try:
-    pc_date, pc_ratio = fetch_pc_ratio()
+    pc_date, pc_ratio = fetch_pc_ratio(max_date)
   except Exception as e:
     print(f"  Put/Call 未平倉比抓取失敗: {e}")
     errors.append("Put/Call 未平倉比")
@@ -625,6 +638,7 @@ def main():
       taiex_res["chart"]["close"],
       foreign_series,
       taiex_res["isoDates"],
+      max_date,
   )
 
   vix_sources = []
