@@ -20,6 +20,7 @@ INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
 SENTIMENT_LOOKBACK_DAYS = 400
 RANK_WINDOW = 250
+MAX_CLOSE_DATE = "2026-11-24"
 
 UP_COLOR = "#de350b"
 DOWN_COLOR = "#1a1a1a"
@@ -52,8 +53,13 @@ def finmind(dataset, data_id, days=120):
   return res["data"]
 
 
-def build_kline_output(df):
+def build_kline_output(df, max_date=MAX_CLOSE_DATE):
   """df 需有 date, open, high, low, close, volume 欄位（volume 單位：億元）。"""
+  df = df.copy()
+  df["date"] = df["date"].astype(str).str.slice(0, 10)
+  if max_date:
+    df = df[df["date"] <= max_date]
+
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
   for col in ("open", "high", "low", "close", "volume"):
     df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -104,7 +110,9 @@ def build_kline_output(df):
 
 def fetch_index_from_yf(yf_symbol):
   start_str = (now_tw() - timedelta(days=INDEX_FETCH_DAYS)).strftime("%Y-%m-%d")
-  end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
+  end_str = (
+      datetime.strptime(MAX_CLOSE_DATE, "%Y-%m-%d") + timedelta(days=1)
+  ).strftime("%Y-%m-%d")
   df = yf.Ticker(yf_symbol).history(start=start_str, end=end_str)
   if df is None or df.empty:
     return None
@@ -121,7 +129,7 @@ def fetch_index_from_yf(yf_symbol):
   )
   vol_series = df["Volume"] if "Volume" in df.columns else 0
   df["volume"] = pd.to_numeric(vol_series, errors="coerce").fillna(0) / 1e8
-  return build_kline_output(df)
+  return build_kline_output(df, max_date=MAX_CLOSE_DATE)
 
 
 def fetch_index(name, finmind_id, yf_symbol):
@@ -134,7 +142,7 @@ def fetch_index(name, finmind_id, yf_symbol):
     df["volume"] = (
         pd.to_numeric(df["Trading_money"], errors="coerce").fillna(0) / 1e8
     )
-    fm_out = build_kline_output(df)
+    fm_out = build_kline_output(df, max_date=MAX_CLOSE_DATE)
     print(f"  FinMind {name} 最新日期: {fm_out['isoDates'][-1]}")
   except Exception as e:
     print(f"  Level 1 失敗: {e}")
@@ -148,7 +156,6 @@ def fetch_index(name, finmind_id, yf_symbol):
   except Exception as e:
     print(f"  Level 2 失敗: {e}")
 
-  # 若兩邊都有資料，挑日期較新的一邊；若只有一邊有，就用有資料的那邊
   if fm_out and yf_out:
     if yf_out["isoDates"][-1] > fm_out["isoDates"][-1]:
       return yf_out, "yfinance"
@@ -169,7 +176,7 @@ def fetch_foreign_futures():
           "TX",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["institutional_investors"] == "外資"
+      if r["institutional_investors"] == "外資" and r["date"] <= MAX_CLOSE_DATE
   ]
   rows.sort(key=lambda r: r["date"])
   if len(rows) < 2:
@@ -188,6 +195,8 @@ def fetch_retail(product="MTX", label="小台"):
   for r in finmind(
       "TaiwanFuturesInstitutionalInvestors", product, days=RETAIL_FETCH_DAYS
   ):
+    if r["date"] > MAX_CLOSE_DATE:
+      continue
     inst_long[r["date"]] = (
         inst_long.get(r["date"], 0) + r["long_open_interest_balance_volume"]
     )
@@ -196,7 +205,7 @@ def fetch_retail(product="MTX", label="小台"):
     )
   total_oi = {}
   for r in finmind("TaiwanFuturesDaily", product, days=RETAIL_FETCH_DAYS):
-    if r.get("trading_session") == "position":
+    if r["date"] <= MAX_CLOSE_DATE and r.get("trading_session") == "position":
       total_oi[r["date"]] = total_oi.get(r["date"], 0) + r["open_interest"]
   out = []
   for d in sorted(inst_long):
@@ -227,7 +236,8 @@ def fetch_pc_ratio():
     ]
     if len(tds) >= 7 and re.match(r"20\d\d/\d+/\d+$", tds[0]):
       date = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
-      return date, float(tds[6].replace(",", ""))
+      if date <= MAX_CLOSE_DATE:
+        return date, float(tds[6].replace(",", ""))
   raise RuntimeError("期交所 P/C 頁面找不到資料列")
 
 
@@ -236,7 +246,7 @@ def fetch_foreign_options():
   rows = [
       r
       for r in finmind("TaiwanOptionInstitutionalInvestors", "TXO", days=15)
-      if r["institutional_investors"] == "外資"
+      if r["institutional_investors"] == "外資" and r["date"] <= MAX_CLOSE_DATE
   ]
   if not rows:
     raise RuntimeError("沒有外資選擇權資料")
@@ -272,7 +282,9 @@ def score_to_status(score):
 def fetch_us_vix_data():
   print("抓取美股 VIX -> [yfinance ^VIX]")
   start_str = (now_tw() - timedelta(days=180)).strftime("%Y-%m-%d")
-  end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
+  end_str = (
+      datetime.strptime(MAX_CLOSE_DATE, "%Y-%m-%d") + timedelta(days=1)
+  ).strftime("%Y-%m-%d")
   hist = yf.Ticker("^VIX").history(start=start_str, end=end_str)
   if hist is None or hist.empty:
     raise RuntimeError("yfinance ^VIX 沒有資料")
@@ -280,6 +292,7 @@ def fetch_us_vix_data():
   df = hist.reset_index().dropna(subset=["Close"]).copy()
   date_col = "Date" if "Date" in df.columns else df.columns[0]
   df["date"] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
+  df = df[df["date"] <= MAX_CLOSE_DATE]
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
   df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
   df = df.dropna(subset=["Close"]).reset_index(drop=True)
@@ -309,46 +322,37 @@ def fetch_us_vix_data():
 
 
 def fetch_tw_vix_data():
-  """嘗試抓取台股 VIX（FinMind TaiwanOptionVix）；若來源無資料或需 token 則安全回傳 None。"""
+  """查詢 FinMind TaiwanOptionVix；若無公開回傳資料則回傳 (None, {})，不寫假數值。"""
   print("抓取台股 VIX -> [FinMind TaiwanOptionVix]")
   try:
-    rows = finmind("TaiwanOptionVix", "", days=RETAIL_FETCH_DAYS)
+    rows = finmind("TaiwanOptionVix", "", days=14)
     df = pd.DataFrame(rows)
     if df.empty or "date" not in df.columns:
+      print("  TaiwanOptionVix 無資料")
       return None, {}
-
-    ignore_cols = {"date", "stock_id", "trading_session", "time"}
-    num_candidates = [c for c in df.columns if c not in ignore_cols]
+    df["date"] = df["date"].astype(str).str.slice(0, 10)
+    df = df[df["date"] <= MAX_CLOSE_DATE]
+    if df.empty:
+      print(f"  TaiwanOptionVix 在 {MAX_CLOSE_DATE} 前無資料")
+      return None, {}
     val_col = next(
-        (
-            c
-            for c in ("vix", "VIX", "close", "Close", "value", "Price", "price")
-            if c in df.columns
-        ),
-        num_candidates[0] if num_candidates else None,
+        (c for c in ("vix", "VIX", "close", "Close", "value") if c in df.columns),
+        None,
     )
     if not val_col:
+      print(f"  TaiwanOptionVix 欄位未匹配: {list(df.columns)}")
       return None, {}
-
     df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
-    df = df.dropna(subset=[val_col]).copy()
-    df["date"] = df["date"].astype(str).str.slice(0, 10)
-    df = df.sort_values("date").groupby("date", as_index=False).last()
+    df = df.dropna(subset=[val_col]).sort_values("date").groupby("date", as_index=False).last()
     if df.empty:
       return None, {}
-
     recent = df.tail(CHART_DAYS)
     latest_date = str(recent["date"].iloc[-1])
     latest_val = round(float(recent[val_col].iloc[-1]), 2)
-    prev_val = (
-        round(float(recent[val_col].iloc[-2]), 2)
-        if len(recent) >= 2
-        else latest_val
-    )
+    prev_val = round(float(recent[val_col].iloc[-2]), 2) if len(recent) >= 2 else latest_val
     change = round(latest_val - prev_val, 2)
     change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
     gauge_score = vix_to_gauge_score(latest_val)
-
     tw_info = {
         "date": latest_date,
         "price": latest_val,
@@ -357,13 +361,10 @@ def fetch_tw_vix_data():
         "score": gauge_score,
         "status": score_to_status(gauge_score),
     }
-    series_map = {
-        str(d): round(float(v), 2)
-        for d, v in zip(recent["date"], recent[val_col])
-    }
+    series_map = {str(d): round(float(v), 2) for d, v in zip(recent["date"], recent[val_col])}
     return tw_info, series_map
   except Exception as e:
-    print(f"  台股 VIX 暫無公開資料（略過）: {e}")
+    print(f"  台股 VIX 未取得資料（略過）: {e}")
     return None, {}
 
 
@@ -441,7 +442,7 @@ def fetch_institutional_flow():
           "",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["name"] == "total"
+      if r["name"] == "total" and r["date"] <= MAX_CLOSE_DATE
   ]
   return sorted((r["date"], r["buy"] - r["sell"]) for r in rows)
 
