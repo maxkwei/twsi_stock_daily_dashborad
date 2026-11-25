@@ -1,0 +1,20 @@
+HISTORY_FILE = "tw_vix_history.json"
+
+
+def load_and_merge_tw_vix_history(new_map):
+  history = {}
+  try:
+    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+      loaded = json.load(f)
+      if isinstance(loaded, dict):
+        history.update(loaded)
+  except FileNotFoundError:
+    pass
+  except Exception as e:
+    print(f"  讀取 {HISTORY_FILE} 略過: {e}")
+
+  history.update(new_map)
+  sorted_history = dict(sorted(history.items()))
+  with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+    json.dump(sorted_history, f, ensure_ascii=False, indent=2)
+  return sorted_history
