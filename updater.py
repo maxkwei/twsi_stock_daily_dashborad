@@ -20,7 +20,7 @@ INDEX_FETCH_DAYS = 260
 RETAIL_FETCH_DAYS = 150
 SENTIMENT_LOOKBACK_DAYS = 400
 RANK_WINDOW = 250
-MAX_CLOSE_DATE = "2026-11-24"
+MAX_CLOSE_DATE = None  # None = 每天自動抓取最新已更新交易日
 
 UP_COLOR = "#de350b"
 DOWN_COLOR = "#1a1a1a"
@@ -110,9 +110,7 @@ def build_kline_output(df, max_date=MAX_CLOSE_DATE):
 
 def fetch_index_from_yf(yf_symbol):
   start_str = (now_tw() - timedelta(days=INDEX_FETCH_DAYS)).strftime("%Y-%m-%d")
-  end_str = (
-      datetime.strptime(MAX_CLOSE_DATE, "%Y-%m-%d") + timedelta(days=1)
-  ).strftime("%Y-%m-%d")
+  end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
   df = yf.Ticker(yf_symbol).history(start=start_str, end=end_str)
   if df is None or df.empty:
     return None
@@ -176,7 +174,8 @@ def fetch_foreign_futures():
           "TX",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["institutional_investors"] == "外資" and r["date"] <= MAX_CLOSE_DATE
+      if r["institutional_investors"] == "外資"
+      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
   ]
   rows.sort(key=lambda r: r["date"])
   if len(rows) < 2:
@@ -195,7 +194,7 @@ def fetch_retail(product="MTX", label="小台"):
   for r in finmind(
       "TaiwanFuturesInstitutionalInvestors", product, days=RETAIL_FETCH_DAYS
   ):
-    if r["date"] > MAX_CLOSE_DATE:
+    if MAX_CLOSE_DATE and r["date"] > MAX_CLOSE_DATE:
       continue
     inst_long[r["date"]] = (
         inst_long.get(r["date"], 0) + r["long_open_interest_balance_volume"]
@@ -205,7 +204,9 @@ def fetch_retail(product="MTX", label="小台"):
     )
   total_oi = {}
   for r in finmind("TaiwanFuturesDaily", product, days=RETAIL_FETCH_DAYS):
-    if r["date"] <= MAX_CLOSE_DATE and r.get("trading_session") == "position":
+    if (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE) and r.get(
+        "trading_session"
+    ) == "position":
       total_oi[r["date"]] = total_oi.get(r["date"], 0) + r["open_interest"]
   out = []
   for d in sorted(inst_long):
@@ -236,7 +237,7 @@ def fetch_pc_ratio():
     ]
     if len(tds) >= 7 and re.match(r"20\d\d/\d+/\d+$", tds[0]):
       date = datetime.strptime(tds[0], "%Y/%m/%d").strftime("%Y-%m-%d")
-      if date <= MAX_CLOSE_DATE:
+      if not MAX_CLOSE_DATE or date <= MAX_CLOSE_DATE:
         return date, float(tds[6].replace(",", ""))
   raise RuntimeError("期交所 P/C 頁面找不到資料列")
 
@@ -246,7 +247,8 @@ def fetch_foreign_options():
   rows = [
       r
       for r in finmind("TaiwanOptionInstitutionalInvestors", "TXO", days=15)
-      if r["institutional_investors"] == "外資" and r["date"] <= MAX_CLOSE_DATE
+      if r["institutional_investors"] == "外資"
+      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
   ]
   if not rows:
     raise RuntimeError("沒有外資選擇權資料")
@@ -282,9 +284,7 @@ def score_to_status(score):
 def fetch_us_vix_data():
   print("抓取美股 VIX -> [yfinance ^VIX]")
   start_str = (now_tw() - timedelta(days=180)).strftime("%Y-%m-%d")
-  end_str = (
-      datetime.strptime(MAX_CLOSE_DATE, "%Y-%m-%d") + timedelta(days=1)
-  ).strftime("%Y-%m-%d")
+  end_str = (now_tw() + timedelta(days=1)).strftime("%Y-%m-%d")
   hist = yf.Ticker("^VIX").history(start=start_str, end=end_str)
   if hist is None or hist.empty:
     raise RuntimeError("yfinance ^VIX 沒有資料")
@@ -292,7 +292,8 @@ def fetch_us_vix_data():
   df = hist.reset_index().dropna(subset=["Close"]).copy()
   date_col = "Date" if "Date" in df.columns else df.columns[0]
   df["date"] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
-  df = df[df["date"] <= MAX_CLOSE_DATE]
+  if MAX_CLOSE_DATE:
+    df = df[df["date"] <= MAX_CLOSE_DATE]
   df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
   df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
   df = df.dropna(subset=["Close"]).reset_index(drop=True)
@@ -321,51 +322,89 @@ def fetch_us_vix_data():
   return vix_info, series_map
 
 
-def fetch_tw_vix_data():
-  """查詢 FinMind TaiwanOptionVix；若無公開回傳資料則回傳 (None, {})，不寫假數值。"""
-  print("抓取台股 VIX -> [FinMind TaiwanOptionVix]")
-  try:
-    rows = finmind("TaiwanOptionVix", "", days=14)
-    df = pd.DataFrame(rows)
-    if df.empty or "date" not in df.columns:
-      print("  TaiwanOptionVix 無資料")
-      return None, {}
-    df["date"] = df["date"].astype(str).str.slice(0, 10)
-    df = df[df["date"] <= MAX_CLOSE_DATE]
-    if df.empty:
-      print(f"  TaiwanOptionVix 在 {MAX_CLOSE_DATE} 前無資料")
-      return None, {}
-    val_col = next(
-        (c for c in ("vix", "VIX", "close", "Close", "value") if c in df.columns),
-        None,
-    )
-    if not val_col:
-      print(f"  TaiwanOptionVix 欄位未匹配: {list(df.columns)}")
-      return None, {}
-    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
-    df = df.dropna(subset=[val_col]).sort_values("date").groupby("date", as_index=False).last()
-    if df.empty:
-      return None, {}
-    recent = df.tail(CHART_DAYS)
-    latest_date = str(recent["date"].iloc[-1])
-    latest_val = round(float(recent[val_col].iloc[-1]), 2)
-    prev_val = round(float(recent[val_col].iloc[-2]), 2) if len(recent) >= 2 else latest_val
-    change = round(latest_val - prev_val, 2)
-    change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
-    gauge_score = vix_to_gauge_score(latest_val)
-    tw_info = {
-        "date": latest_date,
-        "price": latest_val,
-        "change": change,
-        "changePercent": change_pct,
-        "score": gauge_score,
-        "status": score_to_status(gauge_score),
-    }
-    series_map = {str(d): round(float(v), 2) for d, v in zip(recent["date"], recent[val_col])}
-    return tw_info, series_map
-  except Exception as e:
-    print(f"  台股 VIX 未取得資料（略過）: {e}")
+def fetch_tw_vix_data(trading_iso_dates):
+  """直接向期交所抓取台股 VIX（TAIWAN VIX）最新值與近 90 日收盤序列。"""
+  print("抓取台股 VIX -> [期交所 TAIFEX getVixData]")
+  series_map = {}
+
+  for d_iso in trading_iso_dates[-CHART_DAYS:]:
+    if MAX_CLOSE_DATE and d_iso > MAX_CLOSE_DATE:
+      continue
+    ymd = d_iso.replace("-", "")
+    try:
+      resp = requests.get(
+          "https://www.taifex.com.tw/cht/7/getVixData",
+          params={"filesname": ymd},
+          headers=HEADERS,
+          timeout=10,
+      )
+      if resp.status_code != 200 or not resp.text:
+        continue
+      vals = []
+      for line in resp.text.splitlines():
+        line = line.strip()
+        if not line or not line[0].isdigit():
+          continue
+        parts = re.split(r"[\s,]+", line)
+        if len(parts) >= 2:
+          try:
+            v = float(parts[-1])
+            if 5.0 <= v <= 150.0:
+              vals.append(v)
+          except ValueError:
+            pass
+      if vals:
+        series_map[d_iso] = round(vals[-1], 2)
+    except Exception:
+      continue
+
+  if not series_map:
+    try:
+      r = requests.post(
+          "https://mis.taifex.com.tw/futures/api/getVolatilityQuotes",
+          headers={**HEADERS, "Content-Type": "application/json"},
+          json={},
+          timeout=10,
+      ).json()
+      quotes = r.get("RtData", {}).get("QuoteList", [])
+      for q in quotes:
+        if "VIX" in str(q.get("DispCName", "")) or "VIX" in str(
+            q.get("SymbolID", "")
+        ):
+          val = float(q.get("CLastPrice") or q.get("CReferencePrice"))
+          d_iso = trading_iso_dates[-1]
+          series_map[d_iso] = round(val, 2)
+          break
+    except Exception as e:
+      print(f"  期交所備援行情失敗: {e}")
+
+  if not series_map:
+    print("  期交所台股 VIX 暫無資料（略過）")
     return None, {}
+
+  sorted_dates = sorted(series_map.keys())
+  latest_date = sorted_dates[-1]
+  latest_val = series_map[latest_date]
+  prev_val = (
+      series_map[sorted_dates[-2]] if len(sorted_dates) >= 2 else latest_val
+  )
+  change = round(latest_val - prev_val, 2)
+  change_pct = round((change / prev_val) * 100.0, 2) if prev_val else 0.0
+  gauge_score = vix_to_gauge_score(latest_val)
+
+  print(
+      f"  台股 VIX 成功（期交所）: 日期={latest_date}, 數值={latest_val},"
+      f" 共 {len(series_map)} 天"
+  )
+  tw_info = {
+      "date": latest_date,
+      "price": latest_val,
+      "change": change,
+      "changePercent": change_pct,
+      "score": gauge_score,
+      "status": score_to_status(gauge_score),
+  }
+  return tw_info, series_map
 
 
 def build_vix_compare_chart(us_map, tw_map):
@@ -442,12 +481,13 @@ def fetch_institutional_flow():
           "",
           days=SENTIMENT_LOOKBACK_DAYS,
       )
-      if r["name"] == "total" and r["date"] <= MAX_CLOSE_DATE
+      if r["name"] == "total"
+      and (not MAX_CLOSE_DATE or r["date"] <= MAX_CLOSE_DATE)
   ]
   return sorted((r["date"], r["buy"] - r["sell"]) for r in rows)
 
 
-def compute_sentiment(data_date, taiex_closes, foreign_series):
+def compute_sentiment(data_date, taiex_closes, foreign_series, taiex_iso_dates):
   scores, notes, details = {}, [], {}
   us_vix_info, us_map = None, {}
   tw_vix_info, tw_map = None, {}
@@ -487,7 +527,7 @@ def compute_sentiment(data_date, taiex_closes, foreign_series):
   except Exception as e:
     print(f"  美股 VIX 失敗: {e}")
 
-  tw_vix_info, tw_map = fetch_tw_vix_data()
+  tw_vix_info, tw_map = fetch_tw_vix_data(taiex_iso_dates)
   vix_compare_chart = build_vix_compare_chart(us_map, tw_map)
 
   if not scores:
@@ -578,13 +618,18 @@ def main():
       us_vix_info,
       tw_vix_info,
       vix_compare_chart,
-  ) = compute_sentiment(data_date, taiex_res["chart"]["close"], foreign_series)
+  ) = compute_sentiment(
+      data_date,
+      taiex_res["chart"]["close"],
+      foreign_series,
+      taiex_res["isoDates"],
+  )
 
   vix_sources = []
   if us_vix_info:
     vix_sources.append(f"美股 VIX yfinance（{us_vix_info['date']}）")
   if tw_vix_info:
-    vix_sources.append(f"台股 VIX FinMind（{tw_vix_info['date']}）")
+    vix_sources.append(f"台股 VIX 期交所（{tw_vix_info['date']}）")
   vix_source_text = ("、" + "、".join(vix_sources)) if vix_sources else ""
 
   final_data = {
